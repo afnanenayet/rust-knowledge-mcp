@@ -30,8 +30,12 @@ pub struct RustdocArtifact {
 #[derive(Debug, Default)]
 pub struct GeneratedRustdocs {
     pub artifacts: Vec<RustdocArtifact>,
-    /// (package spec, reason) for every package that could not be generated.
+    /// (package spec, reason) for every package where generation was
+    /// attempted and failed.
     pub skipped: Vec<(String, String)>,
+    /// Packages that structurally cannot have rustdoc JSON (e.g. binary-only
+    /// crates). Benign: they may still have README documentation.
+    pub unsupported: Vec<String>,
 }
 
 /// Generates or locates rustdoc JSON artifacts for packages.
@@ -122,7 +126,7 @@ impl RustdocProvider for GeneratedRustdocProvider {
             let spec = format!("{}@{}", pkg.name, pkg.version);
 
             let Some(lib_name) = lib_crate_name(pkg) else {
-                out.skipped.push((spec, "package has no lib target".into()));
+                out.unsupported.push(spec.clone());
                 continue;
             };
 

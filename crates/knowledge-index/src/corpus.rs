@@ -99,6 +99,9 @@ pub fn build_corpus(
         }
         report.skipped = generated.skipped.clone();
     }
+    for spec in &generated.unsupported {
+        info!(package = %spec, "package has no lib target; indexing markdown only");
+    }
 
     for artifact in &generated.artifacts {
         let normalized = normalize(&artifact.package, &artifact.path, universe.workspace_root())?;

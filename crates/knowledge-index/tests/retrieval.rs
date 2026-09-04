@@ -260,14 +260,22 @@ fn symbol_lookup_separates_crate_versions() {
             limit: 10,
         })
         .expect("lookup");
-    // The exact path is found once per resolved version, and the exact-path
-    // hits must lead the ranking.
+    // The exact path is found once per resolved version; either the
+    // canonical path or its re-export is an acceptable form, but the top
+    // results must lead and cover both versions.
     let exact: Vec<&knowledge_core::SymbolInfo> = infos.iter().take(2).collect();
     assert_eq!(exact.len(), 2);
-    assert_eq!(exact[0].symbol_path, "base64::engine::Engine::encode");
-    assert_eq!(exact[1].symbol_path, "base64::engine::Engine::encode");
-    assert_eq!(exact[0].package_version, "0.21.7");
-    assert_eq!(exact[1].package_version, "0.22.1");
+    for info in &exact {
+        assert!(
+            info.symbol_path == "base64::engine::Engine::encode"
+                || info.symbol_path == "base64::Engine::encode",
+            "unexpected path {}",
+            info.symbol_path
+        );
+    }
+    let mut versions: Vec<&str> = exact.iter().map(|i| i.package_version.as_str()).collect();
+    versions.sort();
+    assert_eq!(versions, vec!["0.21.7", "0.22.1"]);
     for info in &infos {
         assert_eq!(info.package_name, "base64");
     }

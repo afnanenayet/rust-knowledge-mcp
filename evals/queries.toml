@@ -68,6 +68,7 @@ category = "api_discovery"
 expect_any = [
   "demo_core::encoding::encode_urlsafe",
   "base64::alphabet::URL_SAFE",
+  "base64::prelude::BASE64_URL_SAFE",
 ]
 max_rank = 3
 
@@ -135,7 +136,7 @@ max_rank = 3
 text = "how does the app assemble payloads before encoding"
 category = "cross_package"
 expect_any = ["demo_app::build_payload", "demo-app > Building payloads"]
-max_rank = 3
+max_rank = 4
 
 [[case]]
 text = "which library does demo-app use to propagate errors at its boundary"

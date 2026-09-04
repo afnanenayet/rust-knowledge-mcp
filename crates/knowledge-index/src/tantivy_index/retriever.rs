@@ -445,18 +445,7 @@ impl KnowledgeRetriever for TantivyRetriever {
                 )),
             ),
         ];
-        if let Some(last) = last_segment.strip_prefix("::") {
-            clauses.push((
-                Occur::Should,
-                Box::new(BoostQuery::new(
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(self.fields.symbol_last, last),
-                        IndexRecordOption::Basic,
-                    )),
-                    40.0,
-                )),
-            ));
-        } else if last_segment != symbol {
+        if last_segment != symbol {
             clauses.push((
                 Occur::Should,
                 Box::new(BoostQuery::new(
@@ -468,12 +457,17 @@ impl KnowledgeRetriever for TantivyRetriever {
                 )),
             ));
         }
-        // All-segments conjunction over the tokenized symbol path: recovers
-        // qualified queries when the exact path differs (e.g. a shorter path
-        // than the indexed one).
-        let segments: Vec<&str> = symbol.split("::").filter(|s| !s.is_empty()).collect();
-        if segments.len() > 1 {
-            let seg_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = segments
+        // Qualified queries: AND over every query token on the tokenized
+        // symbol path (segments are split exactly the way the index
+        // tokenizer splits them, so "spawn_blocking" becomes spawn + blocking)
+        // — this ranks the fully matching path above bare last-segment ties.
+        let path_tokens: Vec<String> = symbol
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+        if symbol.contains("::") && path_tokens.len() > 1 {
+            let seg_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = path_tokens
                 .iter()
                 .map(|s| {
                     (

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use knowledge_core::{DocumentId, KnowledgeDocument, PackageIdentity, SourceKind, SourceSpan};
 use rustdoc_types::{Crate, Id, Item, ItemEnum, Visibility};
+use serde::Deserialize as _;
 use tracing::{debug, info, info_span};
 
 use crate::error::IndexError;
@@ -35,24 +36,16 @@ pub fn normalize(
     let raw = std::fs::read_to_string(artifact).map_err(|e| IndexError::io(artifact, e))?;
 
     // The JSON is a versioned external format: check before parsing fully,
-    // and produce a precise diagnostic when versions mismatch.
-    let probe: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| IndexError::RustdocParse {
-            package: package.display(),
-            got: 0,
-            expected: rustdoc_types::FORMAT_VERSION,
-            artifact: artifact.to_path_buf(),
-            cause: e.to_string(),
-        })?;
-    let got = probe
-        .get("format_version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    // and produce a precise diagnostic when versions mismatch. The flat
+    // top-level field is scanned out of the raw text: probing with
+    // serde_json::Value would itself hit serde's recursion limit on crates
+    // with deeply nested const-generic types (e.g. typenum).
+    let got = extract_format_version(&raw);
     let expected = rustdoc_types::FORMAT_VERSION;
 
-    let parsed: Crate = match serde_json::from_str(&raw) {
+    let parsed: Crate = match parse_crate(&raw) {
         Ok(krate) => krate,
-        Err(e) => {
+        Err(cause) => {
             if got != expected {
                 // Version mismatch is the likely cause; say so explicitly.
                 return Err(IndexError::RustdocFormatVersion {
@@ -67,7 +60,7 @@ pub fn normalize(
                 got,
                 expected,
                 artifact: artifact.to_path_buf(),
-                cause: e.to_string(),
+                cause,
             });
         }
     };
@@ -113,6 +106,49 @@ fn crate_name_for(package: &PackageIdentity) -> String {
     // rustdoc names the root module after the crate; package names with
     // dashes are already underscored in crate names.
     package.name.replace('-', "_")
+}
+
+/// Scans the flat top-level "format_version" number out of the raw JSON
+/// without parsing the whole document (deeply nested crates can exceed
+/// serde's recursion limit even for probe parses). The real field is the
+/// last top-level key and is colon-adjacent; occurrences inside documented
+/// text (this crate's own docs mention format_version!) are escaped and
+/// lack the colon, so scanning from the end avoids them.
+fn extract_format_version(raw: &str) -> u32 {
+    let needle = "\"format_version\":";
+    let Some(pos) = raw.rfind(needle) else {
+        return 0;
+    };
+    let after = &raw[pos + needle.len()..];
+    let digits: String = after
+        .chars()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    digits.parse().unwrap_or(0)
+}
+
+/// Parses a rustdoc JSON artifact. serde's default recursion limit (128) is
+/// too small for crates with deeply nested const-generic types (typenum's
+/// type trees recurse hundreds of levels), so the parse runs with the limit
+/// disabled on a dedicated big-stack thread: a pathological input aborts
+/// the process instead of the whole pipeline silently dying mid-run.
+fn parse_crate(raw: &str) -> Result<Crate, String> {
+    let raw = raw.to_owned();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .name("rustdoc-parse".into())
+        .spawn(move || {
+            let mut de = serde_json::Deserializer::from_str(&raw);
+            de.disable_recursion_limit();
+            Crate::deserialize(&mut de).map_err(|e| e.to_string())
+        })
+        .map_err(|e| e.to_string())?
+        .join()
+        .unwrap_or_else(|_| Err("rustdoc JSON parse thread panicked (possibly a stack overflow on pathological nesting)".to_string()))
 }
 
 /// Where an item sits, driving inclusion policy.
@@ -224,10 +260,22 @@ impl<'a> Walker<'a> {
                 };
                 self.emit_item(item, &path, kind, ctx);
             }
-            // Re-exports, extern crates, struct fields (v1: skipped as noise),
-            // and impl containers reached outside walk_impl.
-            ItemEnum::Use(_)
-            | ItemEnum::ExternCrate { .. }
+            // Re-exports are part of the public API surface: re-export-heavy
+            // crates (tokio-style) expose most items through pub use. Follow
+            // the use to its target and index it under the re-export path,
+            // which is the path callers actually write. External targets
+            // (foreign crates) are skipped by walk_item's crate_id == 0
+            // check; glob re-exports carry no target id.
+            ItemEnum::Use(u) => {
+                if let Some(target) = u.id {
+                    self.walk_item(target, path.clone(), Context::Module);
+                } else {
+                    debug!(path = %path, glob = u.is_glob, "unresolvable re-export");
+                }
+            }
+            // Extern crates, struct fields (v1: skipped as noise), and
+            // impl containers reached outside walk_impl.
+            ItemEnum::ExternCrate { .. }
             | ItemEnum::StructField(_)
             | ItemEnum::Impl(_)
             | ItemEnum::ExternType
@@ -286,7 +334,13 @@ impl<'a> Walker<'a> {
     }
 
     fn item_name(&self, id: &Id) -> Option<String> {
-        self.krate.index.get(id).and_then(|item| item.name.clone())
+        self.krate.index.get(id).and_then(|item| match &item.inner {
+            // Re-export (use) items carry name: null on the Item in
+            // format 61; the effective name (after any rename) lives on
+            // the Use struct itself.
+            ItemEnum::Use(u) => Some(u.name.clone()),
+            _ => item.name.clone(),
+        })
     }
 
     fn is_public(&self, item: &Item) -> bool {

@@ -77,6 +77,18 @@ Empirically verified against nightly `1.100.0-nightly (a69a63265 2026-09-03)`:
 - `Crate.paths` (`ItemSummary`) is **not a complete map** — it is populated
   for items reachable from intra-doc links/trait impls. Full API enumeration
   requires walking `index[root] -> Module.items` recursively.
+- Re-exports (`pub use`) are the primary API surface of re-export-heavy
+  crates (tokio exposes `task::spawn_blocking` this way): `Use` items carry
+  `name: null` on the `Item` (the effective name lives on `Use::name`, after
+  any rename) and `Use::id` points at the target. The walker follows them and
+  indexes targets under the re-export path — following this rule grew the
+  dogfood corpus of this repository's own dependency graph by 3.3x.
+- Deeply nested const-generic types (typenum) exceed serde's default
+  recursion limit; artifacts are parsed with the limit disabled on a
+  dedicated 64 MiB-stack thread, and `format_version` is scanned flat out of
+  the raw text (probing via `serde_json::Value` hits the same limit, and the
+  field name also occurs inside self-referential doc comments — the real
+  field is the last colon-adjacent occurrence).
 - `Span.filename` is relative to rustdoc's working directory (cargo runs
   rustdoc with cwd = workspace root). The ingester resolves spans against the
   workspace root.
@@ -95,18 +107,34 @@ Empirically verified against nightly `1.100.0-nightly (a69a63265 2026-09-03)`:
 ### Tantivy 0.26.1
 
 Local LSM index; used for weighted multi-field lexical retrieval:
-`Schema::builder`, `Index::create_in_dir`/`open`, `QueryParser::for_index`
-with `set_field_boost`, `TermQuery`/`BooleanQuery` for filters and exact
-identifier boosting, `SnippetGenerator` for compact previews,
-`TopDocs::with_limit`. Stored fields give us `get(id)` without a second
-document store (plus a JSONL corpus dump for inspectability).
+`Schema::builder`, `Index::create_in_dir`/`open_in_dir`,
+`QueryParser::for_index` with `set_field_boost`, `TermQuery`/`BooleanQuery`
+for filters and exact identifier boosting, `SnippetGenerator` for compact
+previews, stored fields give us `get(id)` without a second document store
+(plus a JSONL corpus dump for inspectability). Empirical 0.26 notes that
+differ from older tutorials:
+
+- `Index::create_in_dir` does **not** create the directory — create it
+  first (the builder does).
+- `Document` is now a trait; the concrete type is `TantivyDocument`,
+  built with `add_text(field, value)` mutations.
+- `TopDocs::with_limit(n)` is not itself a `Collector` in 0.26:
+  pass `TopDocs::with_limit(n).order_by_score()` to `searcher.search`.
+- Text options are composed via `TEXT | STORED`-style flags; the body field
+  uses the built-in `en_stem` tokenizer (see below).
 
 ### MCP via `rmcp` 3.2.0 (official Rust SDK)
 
 - Pattern: `#[tool_router] impl Handler { #[tool(description = "...")] async
-  fn tool(&self, Parameters(Req{..}): Parameters<Req>) -> ... }` plus
-  `#[tool_handler] impl ServerHandler for Handler { fn get_info ... }`;
-  `rmcp::serve_server(handler, transport::stdio())` runs on stdio.
+  fn tool(&self, Parameters(Req{..}): Parameters<Req>) -> ... }` plus an
+  explicit `#[tool_handler] impl ServerHandler for Handler { fn get_info ... }`
+  (the attribute fills in call_tool/list_tools; `ServerInfo` is
+  `#[non_exhaustive]`, so construct it via `ServerInfo::new` +
+  `.with_instructions`).
+- `rmcp::serve_server(handler, transport::stdio())` runs on stdio; the
+  error type is `rmcp::ErrorData`; `internal_error` takes a message plus
+  an optional JSON payload; `CallToolResult::is_error` is
+  `Option<bool>` in the 2026 protocol.
 - `server` feature already includes `schemars` for tool input schemas.
 - The retrieval core must not depend on MCP: `knowledge-mcp` is a thin
   adapter over `knowledge-core::KnowledgeRetriever`.
@@ -178,25 +206,44 @@ struct KnowledgeDocument { id: DocumentId, package: PackageIdentity,
 
 ## Search design
 
-Tantivy fields (analyzer: `simple + lower_case`), boosts:
+Tantivy fields (tokenized fields: `simple + lower_case`; the `body` prose
+field additionally uses the built-in English stemmer `en_stem`, so "errors"
+matches "error" and "buffered" matches "buffering" — a fix driven directly by
+the Stage 5 eval; identifier fields stay unstemmed because exactness beats
+recall for symbols). Query-time boosts:
 
 | field            | boost | notes                                   |
 |------------------|-------|-----------------------------------------|
 | `symbol_path`    | 10    | tokenized; partial identifier matches    |
 | `title`          | 5     |                                          |
 | `section_text`   | 3     | joined heading ancestry                  |
+| `signature`      | 3     | full signatures are searchable           |
 | `package_name`   | 2.5   |                                           |
-| `body`           | 1     |                                           |
+| `related_text`   | 1.5   | resolved intra-doc link targets          |
+| `body`           | 1     | English stemmer                          |
 
 Plus non-tokenized `symbol_exact` (full path) and `symbol_last` (last path
 segment) fields: identifier-looking query tokens (CamelCase/snake_case/`::`)
-get **term-query boosts (30/12)** layered on the parsed query, so exact symbol
-queries dominate. Filters (`packages`, `source_kinds`, `item_kinds`) are
-BooleanQuery must-clauses on raw string fields; MCP never exposes Tantivy query
-syntax. Snippets: `SnippetGenerator` on the body field, capped ~300 chars.
+get **term-query boosts (30/12, plain words 8)** layered on the parsed query,
+so exact symbol queries dominate. Filters (`packages`, `source_kinds`,
+`item_kinds`) are BooleanQuery must-clauses on raw string fields
+(`package_name_raw`, `package_key` = "name@version"); MCP never exposes
+Tantivy query syntax. Snippets: `SnippetGenerator` on the body field,
+capped ~300 chars, with signature fallback for undocumented items.
 
-`symbol_lookup` is a separate path (exact/last-segment term query), not
-generic search.
+`symbol_lookup` is a separate path (exact → last-segment → all-segments
+conjunction on the tokenized symbol path, descending boosts), not generic
+search.
+
+## Evaluation (Stage 5)
+
+`evals/queries.toml` holds 21 committed queries across the required
+categories (known symbol, API discovery, conceptual, cross-package,
+version-sensitive). Each case states acceptable contexts, an optional package
+constraint and a max rank; the integration test asserts every case passes
+(21/21, MRR ≈ 0.87; 19/21 land at rank 1). The set is the regression
+harness for any retrieval change — the stemmer decision above was validated
+exactly this way.
 
 ## Index layout
 
