@@ -42,6 +42,11 @@ impl SourceKind {
             SourceKind::MarkdownDocument => "markdown_document",
         }
     }
+
+    /// True for documents derived from rustdoc JSON.
+    pub fn is_rustdoc(&self) -> bool {
+        matches!(self, SourceKind::RustdocItem | SourceKind::RustdocModule)
+    }
 }
 
 impl fmt::Display for SourceKind {

@@ -13,23 +13,11 @@ pub enum IndexError {
     #[error("package not found in the resolved universe: {spec}")]
     PackageNotFound { spec: String },
 
-    #[error("rustdoc generation failed for {package} ({command}): {message} - stderr: {stderr}")]
-    RustdocRun {
-        package: String,
-        command: String,
-        message: String,
-        stderr: String,
-    },
+    #[error("failed to spawn cargo for rustdoc generation ({command}): {cause}")]
+    RustdocSpawn { command: String, cause: String },
 
-    #[error(
-        "rustdoc artifact for {package} missing: expected {path} ({hint}). Full command: {command}"
-    )]
-    RustdocArtifactMissing {
-        package: String,
-        path: PathBuf,
-        hint: String,
-        command: String,
-    },
+    #[error("rustdoc generation failed for {spec}: {reason}")]
+    RustdocFailed { spec: String, reason: String },
 
     #[error(
         "failed to parse rustdoc JSON for {package}: format version {got} is incompatible with the parser (rustdoc-types supports {expected}); artifact: {artifact}"

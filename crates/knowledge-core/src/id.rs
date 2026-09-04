@@ -77,7 +77,7 @@ mod tests {
         for i in 0..base.len() {
             let mut parts = base.to_vec();
             parts[i] = "different";
-            let refs: Vec<&str> = parts.iter().copied().collect();
+            let refs: Vec<&str> = parts.to_vec();
             assert_ne!(
                 DocumentId::from_identity(&base),
                 DocumentId::from_identity(&refs),
