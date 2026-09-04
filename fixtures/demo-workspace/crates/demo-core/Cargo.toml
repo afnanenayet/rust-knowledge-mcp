@@ -1,0 +1,9 @@
+[package]
+name = "demo-core"
+version = "0.1.0"
+edition = "2021"
+description = "A miniature async runtime library, used as a retrieval test fixture"
+readme = "README.md"
+
+[dependencies]
+base64 = "0.21"

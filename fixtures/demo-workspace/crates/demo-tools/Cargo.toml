@@ -1,0 +1,9 @@
+[package]
+name = "demo-tools"
+version = "0.1.0"
+edition = "2021"
+description = "Fixture tooling crate"
+readme = "README.md"
+
+[dependencies]
+demo-core = { path = "../demo-core" }

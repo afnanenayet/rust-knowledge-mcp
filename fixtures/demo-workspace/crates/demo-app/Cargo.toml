@@ -1,0 +1,11 @@
+[package]
+name = "demo-app"
+version = "0.1.0"
+edition = "2021"
+description = "Fixture application crate"
+readme = "README.md"
+
+[dependencies]
+demo-core = { path = "../demo-core" }
+anyhow = "1"
+base64 = "0.22"

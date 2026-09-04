@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/demo-app", "crates/demo-tools"]
+# demo-core participates purely as a path dependency of the two members.
+# Without this exclude, cargo would auto-include it as a workspace member
+# (in-tree path deps join the workspace implicitly), and the fixture would
+# no longer exercise the member-vs-path-dependency distinction.
+exclude = ["crates/demo-core"]
