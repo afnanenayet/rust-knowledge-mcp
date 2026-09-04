@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
@@ -58,6 +59,74 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Build the persistent knowledge index for the workspace.
+    Index {
+        /// Which packages get rustdoc JSON generated.
+        #[arg(long, default_value = "workspace")]
+        rustdoc_scope: String,
+
+        /// Toolchain used for rustdoc generation (default: nightly).
+        #[arg(long)]
+        toolchain: Option<String>,
+
+        /// Read prebuilt rustdoc JSON artifacts from this directory instead
+        /// of invoking cargo.
+        #[arg(long)]
+        prebuilt_rustdoc: Option<PathBuf>,
+    },
+
+    /// Search the knowledge index.
+    Search {
+        /// Free-form query: natural language or Rust identifiers.
+        query: String,
+
+        /// Restrict to these packages (name or name@version). Repeatable.
+        #[arg(long = "package")]
+        packages: Vec<String>,
+
+        /// Restrict to source kinds (rustdoc_item, rustdoc_module,
+        /// crate_readme, markdown_document). Repeatable.
+        #[arg(long = "source-kind")]
+        source_kinds: Vec<String>,
+
+        /// Restrict to item kinds (function, struct, trait, ...). Repeatable.
+        #[arg(long = "item-kind")]
+        item_kinds: Vec<String>,
+
+        /// Maximum number of results.
+        #[arg(long, default_value = "8")]
+        limit: usize,
+
+        /// Emit JSON (one hit per line).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Retrieve one document by its stable id.
+    Get {
+        /// Document id (as printed by search).
+        id: String,
+
+        /// Emit the full JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Look up a symbol by (partial) path.
+    Symbol {
+        /// Symbol path or last segment, e.g. demo_core::writer::Writer::flush
+        /// or spawn_blocking.
+        symbol: String,
+
+        /// Restrict to these packages (name or name@version). Repeatable.
+        #[arg(long = "package")]
+        packages: Vec<String>,
+
+        /// Emit JSON (one entry per line).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -86,6 +155,33 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             prebuilt_rustdoc,
             json,
         } => dump_docs(&cli, package, rustdoc_scope, prebuilt_rustdoc, *json),
+        Command::Index {
+            rustdoc_scope,
+            toolchain,
+            prebuilt_rustdoc,
+        } => index(&cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
+        Command::Search {
+            query,
+            packages,
+            source_kinds,
+            item_kinds,
+            limit,
+            json,
+        } => search(
+            &cli,
+            query,
+            packages,
+            source_kinds,
+            item_kinds,
+            *limit,
+            *json,
+        ),
+        Command::Get { id, json } => get(&cli, id, *json),
+        Command::Symbol {
+            symbol,
+            packages,
+            json,
+        } => symbol_lookup(&cli, symbol, packages, *json),
     }
 }
 
@@ -248,4 +344,182 @@ fn index_dir(cli: &Cli, universe: &CargoUniverse) -> PathBuf {
     cli.index_dir
         .clone()
         .unwrap_or_else(|| universe.workspace_root().join(".rust-knowledge"))
+}
+
+fn index(
+    cli: &Cli,
+    rustdoc_scope: &str,
+    toolchain: &Option<String>,
+    prebuilt_rustdoc: &Option<PathBuf>,
+) -> anyhow::Result<()> {
+    let scope = parse_scope(rustdoc_scope)?;
+    let options = knowledge_index::IndexOptions {
+        rustdoc_scope: scope,
+        toolchain: toolchain.clone().or_else(|| Some("nightly".to_string())),
+        prebuilt_rustdoc: prebuilt_rustdoc.clone(),
+        skip_rustdoc: false,
+    };
+    let outcome = knowledge_index::index_workspace(
+        cli.manifest_path.as_deref(),
+        cli.index_dir.as_deref(),
+        &options,
+    )
+    .context("indexing failed")?;
+
+    println!(
+        "indexed {} packages into {} ({} documents)",
+        outcome.corpus.packages,
+        outcome.index_dir.display(),
+        outcome.meta.document_count
+    );
+    for (spec, reason) in &outcome.meta.skipped {
+        eprintln!("skipped {spec}: {reason}");
+    }
+    for warning in &outcome.meta.warnings {
+        eprintln!("warning: {warning}");
+    }
+    println!("search it with: rust-knowledge search <query>");
+    Ok(())
+}
+
+fn parse_source_kinds(raw: &[String]) -> anyhow::Result<Vec<knowledge_core::SourceKind>> {
+    raw.iter()
+        .map(|s| {
+            s.parse::<knowledge_core::SourceKind>()
+                .map_err(anyhow::Error::msg)
+        })
+        .collect()
+}
+
+fn open_retriever(cli: &Cli) -> anyhow::Result<knowledge_index::TantivyRetriever> {
+    knowledge_index::open_retriever(cli.manifest_path.as_deref(), cli.index_dir.as_deref())
+        .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
+        .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
+}
+
+fn search(
+    cli: &Cli,
+    query: &str,
+    packages: &[String],
+    source_kinds: &[String],
+    item_kinds: &[String],
+    limit: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let retriever = open_retriever(cli)?;
+    let query = knowledge_core::SearchQuery {
+        text: query.to_string(),
+        packages: packages.to_vec(),
+        source_kinds: parse_source_kinds(source_kinds)?,
+        item_kinds: item_kinds.to_vec(),
+        limit,
+    };
+    let hits = retriever
+        .search(&query)
+        .map_err(|e| anyhow::anyhow!("search failed: {e}"))?;
+
+    if json {
+        for hit in hits {
+            println!("{}", serde_json::to_string(&hit)?);
+        }
+        return Ok(());
+    }
+
+    for (n, hit) in hits.iter().enumerate() {
+        println!("{}. {}@{}", n + 1, hit.package_name, hit.package_version);
+        let context = match (&hit.symbol_path, hit.section_path.is_empty()) {
+            (Some(symbol), _) => symbol.clone(),
+            (None, false) => hit.section_path.join(" > "),
+            (None, true) => hit.title.clone(),
+        };
+        println!("   {context}");
+        println!("   [{}]", hit.source_kind);
+        println!("   id: {}", hit.id);
+        let text = hit.snippet.replace('\n', " ");
+        println!();
+        println!("   {text}");
+        println!();
+    }
+    if hits.is_empty() {
+        println!("no results");
+    }
+    Ok(())
+}
+
+fn get(cli: &Cli, id: &str, json: bool) -> anyhow::Result<()> {
+    let retriever = open_retriever(cli)?;
+    let document_id = knowledge_core::DocumentId::from_raw(id)
+        .ok_or_else(|| anyhow::anyhow!("{id:?} is not a valid document id"))?;
+    let doc = retriever
+        .get(&document_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+
+    println!("id: {}", doc.id);
+    println!("from: {}", doc.provenance());
+    println!("context: {}", doc.context());
+    if let Some(sig) = &doc.signature {
+        println!("signature: {sig}");
+    }
+    if let Some(path) = &doc.source_path
+        && let Some(span) = &doc.source_span
+    {
+        println!(
+            "source: {}:{}-{}",
+            path.display(),
+            span.start_line,
+            span.end_line
+        );
+    }
+    if !doc.related_symbols.is_empty() {
+        println!("related: {}", doc.related_symbols.join(", "));
+    }
+    println!();
+    println!("{}", doc.text);
+    Ok(())
+}
+
+fn symbol_lookup(cli: &Cli, symbol: &str, packages: &[String], json: bool) -> anyhow::Result<()> {
+    let retriever = open_retriever(cli)?;
+    let query = knowledge_core::SymbolQuery {
+        symbol: symbol.to_string(),
+        packages: packages.to_vec(),
+        limit: 10,
+    };
+    let infos = retriever
+        .symbol_lookup(&query)
+        .map_err(|e| anyhow::anyhow!("symbol lookup failed: {e}"))?;
+
+    if json {
+        for info in infos {
+            println!("{}", serde_json::to_string(&info)?);
+        }
+        return Ok(());
+    }
+
+    for (n, info) in infos.iter().enumerate() {
+        println!(
+            "{}. {}@{} [{}] {}",
+            n + 1,
+            info.package_name,
+            info.package_version,
+            info.kind,
+            info.symbol_path
+        );
+        if let Some(sig) = &info.signature {
+            println!("   {sig}");
+        }
+        println!("   id: {}", info.id);
+        let snippet = info.snippet.replace('\n', " ");
+        println!("   {snippet}");
+        println!();
+    }
+    if infos.is_empty() {
+        println!("no symbol matched {symbol:?}");
+    }
+    Ok(())
 }

@@ -1,0 +1,636 @@
+//! The Tantivy-backed [KnowledgeRetriever].
+//!
+//! Query construction, in one place:
+//! * free text: QueryParser over boosted fields (symbol_path 10, title 5,
+//!   signature 3, section_text 3, package_name 2.5, related_text 1.5, body 1);
+//! * identifier-shaped tokens (CamelCase, snake_case, ::-paths) additionally
+//!   produce raw term queries on symbol_exact (boost 30) and symbol_last
+//!   (boost 12/8), so exact symbol matches dominate identifier queries;
+//! * filters (packages, source kinds, item kinds) are BooleanQuery MUST
+//!   clauses; no Tantivy query syntax is ever exposed to callers.
+
+use std::path::{Path, PathBuf};
+
+use knowledge_core::{
+    DocumentId, KnowledgeDocument, KnowledgeError, KnowledgeRetriever, Result, SearchHit,
+    SearchQuery, SourceKind, SymbolInfo, SymbolQuery,
+};
+use tantivy::collector::TopDocs;
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
+use tantivy::schema::{Field, IndexRecordOption, Value};
+use tantivy::snippet::SnippetGenerator;
+use tantivy::{Index, TantivyDocument, Term};
+use tracing::{info, info_span};
+
+use crate::error::IndexError;
+use crate::store::IndexMeta;
+use crate::tantivy_index::schema::{INDEX_SCHEMA_VERSION, IndexFields, from_tantivy_doc};
+
+/// How long a snippet may be.
+const SNIPPET_CHARS: usize = 300;
+
+pub struct TantivyRetriever {
+    index: Index,
+    reader: tantivy::IndexReader,
+    fields: IndexFields,
+    meta: IndexMeta,
+    index_dir: PathBuf,
+}
+
+impl TantivyRetriever {
+    /// Opens an existing index (built by build_index / index_workspace).
+    pub fn open(index_dir: &Path) -> Result<Self> {
+        let meta_path = IndexMeta::meta_path(index_dir);
+        let meta = IndexMeta::load(&meta_path).map_err(|e| match e {
+            IndexError::Knowledge(k) => k,
+            other => KnowledgeError::Engine(other.to_string()),
+        })?;
+        if meta.schema_version() != INDEX_SCHEMA_VERSION {
+            return Err(KnowledgeError::SchemaVersion {
+                path: index_dir.to_path_buf(),
+                index: meta.schema_version(),
+                supported: INDEX_SCHEMA_VERSION,
+            });
+        }
+        let tantivy_dir = IndexMeta::tantivy_dir(index_dir);
+        let index = Index::open_in_dir(&tantivy_dir).map_err(|e| {
+            KnowledgeError::Engine(format!("open index at {}: {e}", tantivy_dir.display()))
+        })?;
+        let fields = IndexFields::from_schema(&index.schema())
+            .map_err(|e| KnowledgeError::Engine(e.to_string()))?;
+        let reader = index
+            .reader()
+            .map_err(|e| KnowledgeError::Engine(format!("open index reader: {e}")))?;
+        reader
+            .reload()
+            .map_err(|e| KnowledgeError::Engine(format!("reload index: {e}")))?;
+
+        Ok(TantivyRetriever {
+            index,
+            reader,
+            fields,
+            meta,
+            index_dir: index_dir.to_path_buf(),
+        })
+    }
+
+    pub fn meta(&self) -> &IndexMeta {
+        &self.meta
+    }
+
+    /// The normalized corpus stored beside the index (debug tooling).
+    pub fn read_corpus(&self) -> Result<Vec<KnowledgeDocument>> {
+        crate::store::read_corpus(&self.index_dir)
+            .map_err(|e| KnowledgeError::Engine(e.to_string()))
+    }
+
+    fn searcher(&self) -> tantivy::Searcher {
+        self.reader.searcher()
+    }
+
+    fn query_parser(&self, fields: &[Field]) -> QueryParser {
+        let mut parser = QueryParser::for_index(&self.index, fields.to_vec());
+        for (field, boost) in [
+            (self.fields.symbol_path, 10.0),
+            (self.fields.title, 5.0),
+            (self.fields.signature, 3.0),
+            (self.fields.section_text, 3.0),
+            (self.fields.package_name, 2.5),
+            (self.fields.related_text, 1.5),
+            (self.fields.body, 1.0),
+        ] {
+            parser.set_field_boost(field, boost);
+        }
+        parser
+    }
+
+    /// Identifier-shaped tokens become high-boost exact term queries.
+    fn identifier_clauses(&self, text: &str) -> Vec<(Occur, Box<dyn tantivy::query::Query>)> {
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+        for raw in text.split_whitespace() {
+            let token: String = raw
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+                .collect();
+            if token.len() < 3 {
+                continue;
+            }
+            let lower = token.to_lowercase();
+            if lower.contains("::") {
+                clauses.push((
+                    Occur::Should,
+                    Box::new(BoostQuery::new(
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.fields.symbol_exact, &lower),
+                            IndexRecordOption::Basic,
+                        )),
+                        30.0,
+                    )),
+                ));
+                let last = lower.rsplit("::").next().unwrap_or_default().to_string();
+                if last.len() >= 2 {
+                    clauses.push((
+                        Occur::Should,
+                        Box::new(BoostQuery::new(
+                            Box::new(TermQuery::new(
+                                Term::from_field_text(self.fields.symbol_last, &last),
+                                IndexRecordOption::Basic,
+                            )),
+                            12.0,
+                        )),
+                    ));
+                }
+            } else if raw.contains('_') || raw.chars().any(char::is_uppercase) || raw.contains("::")
+            {
+                // snake_case / CamelCase identifiers: strong last-segment boost.
+                clauses.push((
+                    Occur::Should,
+                    Box::new(BoostQuery::new(
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.fields.symbol_last, &lower),
+                            IndexRecordOption::Basic,
+                        )),
+                        12.0,
+                    )),
+                ));
+            } else if token.chars().all(char::is_alphanumeric) && lower.len() >= 4 {
+                // Plain words get a gentle last-segment boost so symbol
+                // matches surface early, without distorting prose queries.
+                clauses.push((
+                    Occur::Should,
+                    Box::new(BoostQuery::new(
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.fields.symbol_last, &lower),
+                            IndexRecordOption::Basic,
+                        )),
+                        8.0,
+                    )),
+                ));
+            }
+        }
+        clauses
+    }
+
+    fn filter_clause(&self, query: &SearchQuery) -> Option<Box<dyn tantivy::query::Query>> {
+        let mut must: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+
+        if !query.packages.is_empty() {
+            let mut package_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+            for package in &query.packages {
+                let spec = package.trim().to_lowercase();
+                if let Some((name, version)) = spec.split_once('@') {
+                    package_clauses.push((
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(
+                                self.fields.package_key,
+                                &format!("{name}@{version}"),
+                            ),
+                            IndexRecordOption::Basic,
+                        )),
+                    ));
+                } else {
+                    package_clauses.push((
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.fields.package_name_raw, &spec),
+                            IndexRecordOption::Basic,
+                        )),
+                    ));
+                }
+            }
+            must.push((Occur::Must, Box::new(BooleanQuery::from(package_clauses))));
+        }
+
+        if !query.source_kinds.is_empty() {
+            let mut kind_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+            for kind in &query.source_kinds {
+                kind_clauses.push((
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.source_kind, kind.as_str()),
+                        IndexRecordOption::Basic,
+                    )),
+                ));
+            }
+            must.push((Occur::Must, Box::new(BooleanQuery::from(kind_clauses))));
+        }
+
+        if !query.item_kinds.is_empty() {
+            let mut kind_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+            for kind in &query.item_kinds {
+                kind_clauses.push((
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.item_kind, &kind.to_lowercase()),
+                        IndexRecordOption::Basic,
+                    )),
+                ));
+            }
+            must.push((Occur::Must, Box::new(BooleanQuery::from(kind_clauses))));
+        }
+
+        if must.is_empty() {
+            None
+        } else if must.len() == 1 {
+            must.pop().map(|(_, q)| q)
+        } else {
+            Some(Box::new(BooleanQuery::from(must)))
+        }
+    }
+
+    fn build_search_query(&self, query: &SearchQuery) -> Option<Box<dyn tantivy::query::Query>> {
+        if query.text.trim().is_empty() {
+            return self.filter_clause(query);
+        }
+        let parser = self.query_parser(&[
+            self.fields.symbol_path,
+            self.fields.title,
+            self.fields.section_text,
+            self.fields.package_name,
+            self.fields.signature,
+            self.fields.related_text,
+            self.fields.body,
+        ]);
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+        match parser.parse_query(query.text.trim()) {
+            Ok(parsed) => clauses.push((Occur::Should, parsed)),
+            Err(_e) => {
+                // Lenient fallback: index what parses.
+                let (parsed, errors) = parser.parse_query_lenient(query.text.trim());
+                if !errors.is_empty() {
+                    tracing::debug!(?errors, "lenient parse produced errors");
+                }
+                clauses.push((Occur::Should, parsed));
+            }
+        }
+        clauses.extend(self.identifier_clauses(query.text.trim()));
+        if let Some(filter) = self.filter_clause(query) {
+            clauses.push((Occur::Must, filter));
+        }
+        Some(Box::new(BooleanQuery::from(clauses)))
+    }
+
+    fn snippet_for(&self, query: &str, doc: &TantivyDocument) -> String {
+        let body_text = doc
+            .get_first(self.fields.body)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if body_text.trim().is_empty() {
+            return self.signature_or_title(doc);
+        }
+        let parser = self.query_parser(&[self.fields.body]);
+        let (body_query, _errors) = parser.parse_query_lenient(query);
+        let searcher = self.searcher();
+        let snippet = match SnippetGenerator::create(&searcher, &body_query, self.fields.body) {
+            Ok(mut generator) => {
+                generator.set_max_num_chars(SNIPPET_CHARS);
+                let snippet = generator.snippet_from_doc(doc);
+                snippet.fragment().trim().to_string()
+            }
+            Err(_) => String::new(),
+        };
+        if snippet.is_empty() {
+            // No body term matched; take the opening of the document.
+            truncate_at_word(body_text, SNIPPET_CHARS)
+        } else {
+            snippet
+        }
+    }
+
+    fn signature_or_title(&self, doc: &TantivyDocument) -> String {
+        if let Some(sig) = doc
+            .get_first(self.fields.signature)
+            .and_then(|v| v.as_str())
+            && !sig.is_empty()
+        {
+            return sig.to_string();
+        }
+        let title = doc
+            .get_first(self.fields.title)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let body = doc
+            .get_first(self.fields.body)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if body.is_empty() {
+            title
+        } else {
+            truncate_at_word(body, SNIPPET_CHARS)
+        }
+    }
+
+    fn hit_from_doc(&self, score: f32, doc: &TantivyDocument) -> Option<SearchHit> {
+        let id = DocumentId::from_raw(
+            doc.get_first(self.fields.id)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)?,
+        )?;
+        let section_path: Vec<String> = doc
+            .get_first(self.fields.section_json)
+            .and_then(|v| v.as_str())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        Some(SearchHit {
+            id,
+            package_name: doc
+                .get_first(self.fields.package_name)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            package_version: doc
+                .get_first(self.fields.package_version)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            source_kind: doc
+                .get_first(self.fields.source_kind)
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<SourceKind>().ok())
+                .unwrap_or(SourceKind::MarkdownDocument),
+            title: doc
+                .get_first(self.fields.title)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            symbol_path: doc
+                .get_first(self.fields.symbol_path)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            section_path,
+            snippet: String::new(),
+            score,
+        })
+    }
+}
+
+impl KnowledgeRetriever for TantivyRetriever {
+    fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        let span = info_span!("search", query = %query.text);
+        let _enter = span.enter();
+        let start = std::time::Instant::now();
+
+        let limit = query.limit.max(1);
+        let tantivy_query = self
+            .build_search_query(query)
+            .ok_or_else(|| KnowledgeError::Engine("empty query".into()))?;
+        let searcher = self.searcher();
+        let top = searcher
+            .search(&tantivy_query, &TopDocs::with_limit(limit).order_by_score())
+            .map_err(KnowledgeError::engine)?;
+
+        let mut hits = Vec::with_capacity(top.len());
+        for (score, addr) in top {
+            let doc: TantivyDocument = searcher.doc(addr).map_err(KnowledgeError::engine)?;
+            if let Some(mut hit) = self.hit_from_doc(score, &doc) {
+                hit.snippet = self.snippet_for(&query.text, &doc);
+                hits.push(hit);
+            }
+        }
+        info!(
+            hits = hits.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "search done"
+        );
+        Ok(hits)
+    }
+
+    fn get(&self, id: &DocumentId) -> Result<KnowledgeDocument> {
+        let searcher = self.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.fields.id, id.as_str()),
+            IndexRecordOption::Basic,
+        );
+        let top = searcher
+            .search(&query, &TopDocs::with_limit(1).order_by_score())
+            .map_err(KnowledgeError::engine)?;
+        let (_, addr) = top
+            .first()
+            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))?;
+        let doc: TantivyDocument = searcher.doc(*addr).map_err(KnowledgeError::engine)?;
+        from_tantivy_doc(&self.fields, &doc)
+            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))
+    }
+
+    fn symbol_lookup(&self, query: &SymbolQuery) -> Result<Vec<SymbolInfo>> {
+        let span = info_span!("symbol_lookup", symbol = %query.symbol);
+        let _enter = span.enter();
+
+        let symbol = query.symbol.trim().to_lowercase();
+        if symbol.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let exact = Box::new(BoostQuery::new(
+            Box::new(TermQuery::new(
+                Term::from_field_text(self.fields.symbol_exact, &symbol),
+                IndexRecordOption::Basic,
+            )),
+            100.0,
+        ));
+        let last_segment = symbol.rsplit("::").next().unwrap_or_default().to_string();
+        let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
+            (Occur::Should, exact),
+            (
+                Occur::Should,
+                Box::new(BoostQuery::new(
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.symbol_last, &symbol),
+                        IndexRecordOption::Basic,
+                    )),
+                    50.0,
+                )),
+            ),
+        ];
+        if let Some(last) = last_segment.strip_prefix("::") {
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.symbol_last, last),
+                        IndexRecordOption::Basic,
+                    )),
+                    40.0,
+                )),
+            ));
+        } else if last_segment != symbol {
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.fields.symbol_last, &last_segment),
+                        IndexRecordOption::Basic,
+                    )),
+                    40.0,
+                )),
+            ));
+        }
+        // All-segments conjunction over the tokenized symbol path: recovers
+        // qualified queries when the exact path differs (e.g. a shorter path
+        // than the indexed one).
+        let segments: Vec<&str> = symbol.split("::").filter(|s| !s.is_empty()).collect();
+        if segments.len() > 1 {
+            let seg_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = segments
+                .iter()
+                .map(|s| {
+                    (
+                        Occur::Must,
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.fields.symbol_path, s),
+                            IndexRecordOption::Basic,
+                        )) as Box<dyn tantivy::query::Query>,
+                    )
+                })
+                .collect();
+            clauses.push((
+                Occur::Should,
+                Box::new(BoostQuery::new(
+                    Box::new(BooleanQuery::from(seg_clauses)),
+                    30.0,
+                )),
+            ));
+        }
+
+        if !query.packages.is_empty() {
+            let filter = self.filter_clause(&SearchQuery {
+                text: String::new(),
+                packages: query.packages.clone(),
+                source_kinds: Vec::new(),
+                item_kinds: Vec::new(),
+                limit: query.limit,
+            });
+            if let Some(filter) = filter {
+                clauses.push((Occur::Must, filter));
+            }
+        }
+
+        let boolean = BooleanQuery::from(clauses);
+        let searcher = self.searcher();
+        let top = searcher
+            .search(
+                &boolean,
+                &TopDocs::with_limit(query.limit.max(1)).order_by_score(),
+            )
+            .map_err(KnowledgeError::engine)?;
+
+        let mut out = Vec::with_capacity(top.len());
+        for (_score, addr) in top {
+            let doc: TantivyDocument = searcher.doc(addr).map_err(KnowledgeError::engine)?;
+            let Some(symbol_path) = doc
+                .get_first(self.fields.symbol_path)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let body = doc
+                .get_first(self.fields.body)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let related: Vec<String> = doc
+                .get_first(self.fields.related_json)
+                .and_then(|v| v.as_str())
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default();
+            let span_value: Option<knowledge_core::SourceSpan> = doc
+                .get_first(self.fields.source_span_json)
+                .and_then(|v| v.as_str())
+                .and_then(|s| serde_json::from_str(s).ok());
+            out.push(SymbolInfo {
+                id: DocumentId::from_raw(
+                    doc.get_first(self.fields.id)
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_default(),
+                )
+                .unwrap_or_else(|| DocumentId::from_identity(&[])),
+                package_name: doc
+                    .get_first(self.fields.package_name)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                package_version: doc
+                    .get_first(self.fields.package_version)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                kind: doc
+                    .get_first(self.fields.item_kind)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "module".to_string()),
+                symbol_path,
+                signature: doc
+                    .get_first(self.fields.signature)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                snippet: if body.trim().is_empty() {
+                    doc.get_first(self.fields.signature)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    truncate_at_word(body, 240)
+                },
+                source_path: doc
+                    .get_first(self.fields.source_path)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from),
+                source_span: span_value,
+                related_symbols: related,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Truncates text to at most max chars, breaking on a word boundary.
+pub(crate) fn truncate_at_word(text: &str, max: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= max {
+        return trimmed.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &trimmed[..end];
+    match head.rfind(char::is_whitespace) {
+        Some(space) if space > max / 2 => format!("{}...", head[..space].trim_end()),
+        _ => format!("{head}..."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_on_word_boundary() {
+        let text = "Runs the provided closure on a thread where blocking operations are acceptable";
+        let cut = truncate_at_word(text, 30);
+        assert!(cut.len() <= 33, "cut: {cut:?}");
+        assert!(cut.ends_with("..."));
+        assert!(!cut.ends_with(" ..."));
+    }
+
+    #[test]
+    fn short_text_passes_through() {
+        assert_eq!(truncate_at_word("short text", 100), "short text");
+    }
+
+    #[test]
+    fn respects_char_boundaries() {
+        // Multi-byte characters must not split mid-character.
+        let text = "ä".repeat(50);
+        let cut = truncate_at_word(&text, 20);
+        assert!(cut.chars().all(|c| c == 'ä' || c == '.'));
+    }
+}

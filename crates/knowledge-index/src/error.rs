@@ -52,6 +52,9 @@ pub enum IndexError {
         source: serde_json::Error,
     },
 
+    #[error("index engine failure: {0}")]
+    Engine(String),
+
     #[error(transparent)]
     Knowledge(#[from] KnowledgeError),
 

@@ -11,13 +11,19 @@
 //! * [tantivy_index] - schema, index build, and the [KnowledgeRetriever]
 //!   implementation.
 //! * [store] - persistent index layout and metadata.
+//! * [pipeline] - the end-to-end index command used by CLI and tests.
 
 pub mod cargo;
 pub mod corpus;
 pub mod error;
 pub mod markdown;
+pub mod pipeline;
 pub mod rustdoc;
+pub mod store;
+pub mod tantivy_index;
 
 pub use cargo::CargoUniverse;
 pub use corpus::{CorpusOptions, CorpusReport, RustdocScope, build_corpus};
 pub use error::IndexError;
+pub use pipeline::{IndexOptions, IndexOutcome, index_workspace, open_retriever};
+pub use tantivy_index::TantivyRetriever;

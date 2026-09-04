@@ -39,6 +39,14 @@ impl DocumentId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Rebuilds an id from its hex form (as stored in an index). Only accepts
+    /// the shape this crate produces.
+    pub fn from_raw(raw: impl Into<String>) -> Option<Self> {
+        let raw = raw.into();
+        (raw.len() == 32 && raw.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then_some(DocumentId(raw.to_lowercase()))
+    }
 }
 
 impl fmt::Display for DocumentId {
