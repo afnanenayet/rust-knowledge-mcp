@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/knowledge-core",
+    "crates/knowledge-index",
+    "crates/knowledge-cli",
+    "crates/knowledge-mcp",
+]
+# The integration-test fixture is its own cargo workspace, built by tests.
+exclude = ["fixtures/demo-workspace"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+knowledge-core = { path = "crates/knowledge-core" }
+knowledge-index = { path = "crates/knowledge-index" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+cargo_metadata = "0.23.1"
+rustdoc-types = "0.61.0"
+tantivy = "0.26.1"
+rmcp = { version = "3.2.0", features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util"] }
+clap = { version = "4.6.6", features = ["derive"] }
+pulldown-cmark = "0.13.4"
+walkdir = "2"
+sha2 = "0.10"
+
+[profile.dev]
+# Tantivy indexing is IO-heavy; opt-level 1 keeps debug builds usable.
+opt-level = 1

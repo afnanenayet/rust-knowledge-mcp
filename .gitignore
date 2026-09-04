@@ -1,0 +1,7 @@
+# Build artifacts
+/target
+/fixtures/demo-workspace/target
+
+# Generated knowledge index (never commit index data)
+.rust-knowledge/
+**/.rust-knowledge/

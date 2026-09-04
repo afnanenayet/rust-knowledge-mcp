@@ -1,0 +1,26 @@
+[package]
+name = "knowledge-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cargo-universe ingestion, corpus normalization and lexical retrieval"
+
+[dependencies]
+knowledge-core = { workspace = true }
+cargo_metadata = { workspace = true }
+rustdoc-types = { workspace = true }
+tantivy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pulldown-cmark = { workspace = true }
+walkdir = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "fixture"
+path = "tests/fixture.rs"
