@@ -56,7 +56,7 @@ fn build_temp_index(tag: &str) -> (tempfile::TempDir, TantivyRetriever) {
     (tempfile::TempDir::new().expect("unused"), retriever)
 }
 
-fn search<'a>(retriever: &'a TantivyRetriever, query: &str) -> Vec<knowledge_core::SearchHit> {
+fn search(retriever: &TantivyRetriever, query: &str) -> Vec<knowledge_core::SearchHit> {
     retriever
         .search(&SearchQuery::new(query))
         .expect("search succeeds")
