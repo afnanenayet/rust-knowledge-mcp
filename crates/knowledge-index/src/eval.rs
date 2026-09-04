@@ -59,7 +59,7 @@ impl EvalOutcome {
 pub fn run_eval(retriever: &dyn KnowledgeRetriever, cases: Vec<EvalCase>) -> Vec<EvalOutcome> {
     let mut outcomes = Vec::with_capacity(cases.len());
     for case in cases {
-        let limit = case.max_rank.max(5).min(10);
+        let limit = case.max_rank.clamp(5, 10);
         let query = SearchQuery {
             text: case.text.clone(),
             packages: Vec::new(),
