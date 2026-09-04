@@ -1,0 +1,166 @@
+# Retrieval evaluation set for the demo-workspace fixture corpus.
+#
+# Each case records:
+#   text           - the query, phrased as a coding agent would ask it
+#   category       - known_symbol | api_discovery | conceptual | cross_package | version_sensitive
+#   expect_any     - acceptable contexts (symbol path or section path, prefix-matched);
+#                    the first matching hit within max_rank counts as useful
+#   expect_package - optional package restriction ("name" or "name@version")
+#   max_rank       - the first useful hit must rank at most this high (1-based)
+#
+# The integration test (crates/knowledge-index/tests/eval.rs) asserts every
+# case passes; "rust-knowledge eval" prints the table for manual inspection.
+
+[[case]]
+text = "write_all"
+category = "known_symbol"
+expect_any = ["demo_core::writer::Writer::write_all"]
+max_rank = 1
+
+[[case]]
+text = "Writer::flush"
+category = "known_symbol"
+expect_any = ["demo_core::writer::Writer::flush"]
+max_rank = 2
+
+[[case]]
+text = "RuntimeGuard"
+category = "known_symbol"
+expect_any = ["demo_core::runtime::RuntimeGuard"]
+max_rank = 2
+
+[[case]]
+text = "encode_urlsafe"
+category = "known_symbol"
+expect_any = ["demo_core::encoding::encode_urlsafe"]
+max_rank = 1
+
+[[case]]
+text = "build_payload"
+category = "known_symbol"
+expect_any = ["demo_app::build_payload"]
+max_rank = 1
+
+[[case]]
+text = "what API should I use to run blocking work off the async task"
+category = "api_discovery"
+expect_any = [
+  "demo_core::runtime::offload_blocking",
+  "demo-core > Runtime > CPU-bound work",
+]
+max_rank = 3
+
+[[case]]
+text = "is there an API that batches small writes before committing"
+category = "api_discovery"
+expect_any = ["demo_core::writer::BatchingWriter"]
+max_rank = 3
+
+[[case]]
+text = "how do I put a task to sleep until a deadline"
+category = "api_discovery"
+expect_any = ["demo_core::runtime::sleep_until"]
+max_rank = 3
+
+[[case]]
+text = "encode bytes as url safe base64"
+category = "api_discovery"
+expect_any = [
+  "demo_core::encoding::encode_urlsafe",
+  "base64::alphabet::URL_SAFE",
+]
+max_rank = 3
+
+[[case]]
+text = "how many bytes are buffered in the writer"
+category = "api_discovery"
+expect_any = [
+  "demo_core::writer::Writer",
+  "demo_tools::measure",
+]
+max_rank = 3
+
+[[case]]
+text = "how should CPU intensive work be handled in the async runtime"
+category = "conceptual"
+expect_any = [
+  "demo_core::runtime::offload_blocking",
+  "demo-core > Runtime > CPU-bound work",
+  "demo_core::runtime",
+]
+max_rank = 3
+
+[[case]]
+text = "why does a blocked task starve the scheduler"
+category = "conceptual"
+expect_any = ["demo_core::runtime", "demo-core > Runtime"]
+max_rank = 3
+
+[[case]]
+text = "when should buffered data be flushed to the destination"
+category = "conceptual"
+expect_any = [
+  "demo_core::writer::Writer::flush",
+  "demo-core > Writing data > Buffering",
+  "demo-core guide > Choosing a writer",
+]
+max_rank = 4
+
+[[case]]
+text = "how does demo-core report errors"
+category = "conceptual"
+expect_any = [
+  "demo_core::error",
+  "demo-core > Error handling",
+]
+max_rank = 3
+
+[[case]]
+text = "what should I do about a slow asynchronous destination"
+category = "conceptual"
+expect_any = [
+  "demo_core::writer::BatchingWriter",
+  "demo-core > Writing data > Asynchronous writers",
+]
+max_rank = 3
+
+[[case]]
+text = "how do demo-app and demo-core interact"
+category = "cross_package"
+expect_any = ["demo_app", "demo-app > Building payloads"]
+expect_package = "demo-app"
+max_rank = 3
+
+[[case]]
+text = "how does the app assemble payloads before encoding"
+category = "cross_package"
+expect_any = ["demo_app::build_payload", "demo-app > Building payloads"]
+max_rank = 3
+
+[[case]]
+text = "which library does demo-app use to propagate errors at its boundary"
+category = "cross_package"
+# The demo-app crate-level rustdoc documents error propagation with anyhow.
+expect_any = ["anyhow", "demo_app", "demo-app > Error strategy"]
+max_rank = 3
+
+[[case]]
+text = "does base64 0.21 still support the Config API"
+category = "version_sensitive"
+expect_any = ["base64::engine::Config", "base64::engine::Engine::config"]
+expect_package = "base64@0.21.7"
+max_rank = 3
+
+[[case]]
+text = "Engine abstraction implementations for encoding"
+category = "version_sensitive"
+expect_any = ["base64::engine"]
+expect_package = "base64"
+max_rank = 3
+
+[[case]]
+text = "Config::encode_padding"
+category = "version_sensitive"
+expect_any = ["base64::engine::Config::encode_padding"]
+expect_package = "base64@0.21.7"
+max_rank = 3

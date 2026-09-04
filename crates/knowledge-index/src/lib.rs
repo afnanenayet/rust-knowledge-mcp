@@ -12,10 +12,12 @@
 //!   implementation.
 //! * [store] - persistent index layout and metadata.
 //! * [pipeline] - the end-to-end index command used by CLI and tests.
+//! * [eval] - retrieval evaluation over a committed query set.
 
 pub mod cargo;
 pub mod corpus;
 pub mod error;
+pub mod eval;
 pub mod markdown;
 pub mod pipeline;
 pub mod rustdoc;

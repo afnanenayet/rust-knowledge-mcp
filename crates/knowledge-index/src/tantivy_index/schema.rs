@@ -72,6 +72,18 @@ fn text_unstored() -> TextOptions {
     TEXT
 }
 
+/// Tokenized with the English stemmer, indexed, stored. Used for prose
+/// (document bodies) so that "errors" matches "error" and "buffered"
+/// matches "buffering". Identifier fields stay unstemmed: exactness beats
+/// recall for symbols.
+fn body() -> TextOptions {
+    TextOptions::default().set_stored().set_indexing_options(
+        tantivy::schema::TextFieldIndexing::default()
+            .set_tokenizer("en_stem")
+            .set_index_option(tantivy::schema::IndexRecordOption::WithFreqsAndPositions),
+    )
+}
+
 /// Untokenized, indexed, stored.
 fn raw() -> TextOptions {
     STRING | TextOptions::default().set_stored()
@@ -103,7 +115,7 @@ pub fn build_schema() -> Schema {
     builder.add_text_field("symbol_last", raw_unstored());
     builder.add_text_field("section_text", text());
     builder.add_text_field("section_json", stored_only());
-    builder.add_text_field("body", text());
+    builder.add_text_field("body", body());
     builder.add_text_field("signature", text());
     builder.add_text_field("related_text", text_unstored());
     builder.add_text_field("related_json", stored_only());

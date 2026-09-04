@@ -127,6 +127,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Run the retrieval evaluation set against the knowledge index.
+    Eval {
+        /// Path to the eval file (TOML, [[case]] entries).
+        file: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -182,6 +188,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             packages,
             json,
         } => symbol_lookup(&cli, symbol, packages, *json),
+        Command::Eval { file } => eval(&cli, file),
     }
 }
 
@@ -520,6 +527,43 @@ fn symbol_lookup(cli: &Cli, symbol: &str, packages: &[String], json: bool) -> an
     }
     if infos.is_empty() {
         println!("no symbol matched {symbol:?}");
+    }
+    Ok(())
+}
+
+fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
+    let raw = std::fs::read_to_string(file)
+        .with_context(|| format!("failed to read eval file {}", file.display()))?;
+    let cases = knowledge_index::eval::parse_cases(&raw)
+        .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", file.display()))?;
+    let retriever = open_retriever(cli)?;
+
+    let outcomes = knowledge_index::eval::run_eval(&retriever, cases);
+    let summary = knowledge_index::eval::summarize(&outcomes);
+
+    for outcome in &outcomes {
+        let status = if outcome.passed() { "PASS" } else { "FAIL" };
+        let rank = outcome
+            .rank
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "{status} rank {rank:>2} {:>16} {:?}",
+            outcome.case.category, outcome.case.text
+        );
+        if !outcome.passed() {
+            println!(
+                "     expected one of {:?}, top: {:?}",
+                outcome.case.expect_any, outcome.top
+            );
+        }
+    }
+    println!(
+        "{}/{} passed, MRR {:.3}",
+        summary.passed, summary.total, summary.mrr
+    );
+    if summary.passed != summary.total {
+        std::process::exit(1);
     }
     Ok(())
 }
