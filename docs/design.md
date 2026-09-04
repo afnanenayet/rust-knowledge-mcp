@@ -273,16 +273,21 @@ indexing can be added later without format breakage.
 - Indexing is the expensive step; search re-opens the persisted index,
   never invokes cargo/rustdoc, and does not re-parse rustdoc JSON.
 
-## Staged plan
+## Staged plan (status)
 
-- Stage 1 cargo universe: ingestion, `PackageIdentity`, `packages` CLI.
+- Stage 1 cargo universe: ingestion, `PackageIdentity`, `packages` CLI. Done.
 - Stage 2 corpus: rustdoc provider + normalizer, markdown chunker,
-  `dump-docs`.
-- Stage 3 lexical index: Tantivy schema/boosts, `index`/`search`/`get`.
-- Stage 4 MCP: three tools over the same retriever.
-- Stage 5 eval: ~20 committed queries over a fixture workspace with expected
-  package/symbol + rank assertions.
-- Stage 6 (future) semantic retrieval.
+  `dump-docs`. Done.
+- Stage 3 lexical index: Tantivy schema/boosts, `index`/`search`/`get`/
+  `symbol`. Done.
+- Stage 4 MCP: three tools over the same retriever, tested in-process against
+  a real client and smoke-tested over stdio. Done.
+- Stage 5 eval: 21 committed queries over the fixture workspace with expected
+  contexts and rank assertions (21/21, MRR ≈ 0.87). Done.
+- Dogfood: the repository indexes its own 230-package dependency graph
+  (36k documents); `symbol tokio::task::spawn_blocking` resolves with
+  provenance, and cargo never gets invoked at query time.
+- Stage 6 (future) semantic retrieval: not built, by design (below).
 
 ## Semantic retrieval (future design note)
 
