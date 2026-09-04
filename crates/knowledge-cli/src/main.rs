@@ -534,11 +534,21 @@ fn symbol_lookup(cli: &Cli, symbol: &str, packages: &[String], json: bool) -> an
 fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
     let raw = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read eval file {}", file.display()))?;
-    let cases = knowledge_index::eval::parse_cases(&raw)
+    let eval_set = knowledge_index::eval::parse_set(&raw)
         .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", file.display()))?;
     let retriever = open_retriever(cli)?;
 
-    let outcomes = knowledge_index::eval::run_eval(&retriever, cases);
+    // Eval sets are corpus-specific: refuse to score one against a different
+    // workspace instead of producing meaningless numbers.
+    if let Some(corpus) = &eval_set.corpus {
+        let root = retriever.meta().workspace_root.display().to_string();
+        anyhow::ensure!(
+            root.ends_with(corpus.trim_end_matches('/')),
+            "this eval file targets the {corpus:?} workspace; the current index              was built for {root:?}. Point --index-dir/--manifest-path at the              matching workspace."
+        );
+    }
+
+    let outcomes = knowledge_index::eval::run_eval(&retriever, eval_set.cases);
     let summary = knowledge_index::eval::summarize(&outcomes);
 
     for outcome in &outcomes {

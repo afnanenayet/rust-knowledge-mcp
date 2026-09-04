@@ -29,13 +29,33 @@ fn default_max_rank() -> usize {
 }
 
 /// Parses an eval TOML file ("[[case]]" array) into cases.
-pub fn parse_cases(raw: &str) -> Result<Vec<EvalCase>, String> {
+/// A parsed eval file: an optional corpus declaration plus the cases.
+#[derive(Clone, Debug)]
+pub struct EvalSet {
+    /// Workspace (or workspace-relative fixture directory) the cases target.
+    /// When set, running the eval against an index for a different workspace
+    /// is refused instead of producing meaningless scores.
+    pub corpus: Option<String>,
+    pub cases: Vec<EvalCase>,
+}
+
+/// Parses an eval TOML file ("corpus" key plus "[[case]]" array).
+pub fn parse_set(raw: &str) -> Result<EvalSet, String> {
     #[derive(Deserialize)]
-    struct EvalFile {
+    struct RawEval {
+        corpus: Option<String>,
         case: Vec<EvalCase>,
     }
-    let file: EvalFile = toml::from_str(raw).map_err(|e| e.to_string())?;
-    Ok(file.case)
+    let file: RawEval = toml::from_str(raw).map_err(|e| e.to_string())?;
+    Ok(EvalSet {
+        corpus: file.corpus,
+        cases: file.case,
+    })
+}
+
+/// Parses only the cases of an eval TOML file.
+pub fn parse_cases(raw: &str) -> Result<Vec<EvalCase>, String> {
+    Ok(parse_set(raw)?.cases)
 }
 
 /// Result of one eval case.

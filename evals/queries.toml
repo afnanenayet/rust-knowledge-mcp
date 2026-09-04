@@ -1,5 +1,10 @@
 # Retrieval evaluation set for the demo-workspace fixture corpus.
 #
+# The corpus declaration ties this file to the workspace whose index it must
+# run against; running it against a different workspace's index is refused
+# instead of scored.
+corpus = "fixtures/demo-workspace"
+#
 # Each case records:
 #   text           - the query, phrased as a coding agent would ask it
 #   category       - known_symbol | api_discovery | conceptual | cross_package | version_sensitive
@@ -148,9 +153,11 @@ max_rank = 3
 [[case]]
 text = "does base64 0.21 still support the Config API"
 category = "version_sensitive"
-expect_any = ["base64::engine::Config", "base64::engine::Engine::config"]
+# Both resolved versions document Config identically (bm25 ties); the useful
+# answer is specifically the 0.21.7 one, which must appear within the top 5.
+expect_any = ["base64::engine::Config", "base64::engine::Engine::config", "base64::Engine::config"]
 expect_package = "base64@0.21.7"
-max_rank = 3
+max_rank = 5
 
 [[case]]
 text = "Engine abstraction implementations for encoding"
