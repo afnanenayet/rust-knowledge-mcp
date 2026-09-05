@@ -5,7 +5,7 @@
 mod common;
 
 use knowledge_core::SourceKind;
-use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock};
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
 
 fn json_of(result: &CallToolResult) -> Value {

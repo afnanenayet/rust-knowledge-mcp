@@ -98,6 +98,7 @@ fn md_file() -> MarkdownFile {
 #[test]
 fn search_survives_every_payload() {
     let retriever = common::retriever();
+    let mut unexpected: Vec<String> = Vec::new();
     for (name, payload) in payloads() {
         let query = SearchQuery {
             limit: 8,
@@ -121,14 +122,19 @@ fn search_survives_every_payload() {
             }
             // The only legitimate error is the structured empty-query error.
             Err(KnowledgeError::Engine(_)) => {}
-            Err(other) => assert!(false, "{name}: unexpected error: {other:?}"),
+            Err(other) => unexpected.push(format!("{name}: unexpected error: {other:?}")),
         }
     }
+    assert!(
+        unexpected.is_empty(),
+        "unexpected errors: {unexpected:?}"
+    );
 }
 
 #[test]
 fn symbol_lookup_survives_every_payload() {
     let retriever = common::retriever();
+    let mut unexpected: Vec<String> = Vec::new();
     for (name, payload) in payloads() {
         let query = SymbolQuery {
             limit: 8,
@@ -144,14 +150,19 @@ fn symbol_lookup_survives_every_payload() {
                     );
                 }
             }
-            Err(other) => assert!(false, "{name}: unexpected error: {other:?}"),
+            Err(other) => unexpected.push(format!("{name}: unexpected error: {other:?}")),
         }
     }
+    assert!(
+        unexpected.is_empty(),
+        "unexpected errors: {unexpected:?}"
+    );
 }
 
 #[test]
 fn id_parsing_and_get_survive_every_payload() {
     let retriever = common::retriever();
+    let mut unexpected: Vec<String> = Vec::new();
 
     // A known id still resolves to an intact document.
     let known = common::sample_id();
@@ -166,7 +177,7 @@ fn id_parsing_and_get_survive_every_payload() {
     match retriever.get(&parsed) {
         Ok(found) => assert_eq!(found.id, parsed),
         Err(KnowledgeError::DocumentNotFound(_)) => {}
-        Err(other) => assert!(false, "unexpected error for uppercase id: {other:?}"),
+        Err(other) => unexpected.push(format!("unexpected error for uppercase id: {other:?}")),
     }
 
     for (name, payload) in payloads() {
@@ -176,10 +187,16 @@ fn id_parsing_and_get_survive_every_payload() {
             Some(id) => match retriever.get(&id) {
                 Ok(found) => assert_eq!(found.id, id, "{name}: got a different document"),
                 Err(KnowledgeError::DocumentNotFound(_)) => {}
-                Err(other) => assert!(false, "{name}: unexpected error: {other:?}"),
+                Err(other) => {
+                    unexpected.push(format!("{name}: unexpected error: {other:?}"));
+                }
             },
         }
     }
+    assert!(
+        unexpected.is_empty(),
+        "unexpected errors: {unexpected:?}"
+    );
 }
 
 #[test]
