@@ -1,17 +1,116 @@
 # Instructions for coding agents working in this repository
 
-When investigating Rust dependencies of this workspace, do not recursively
-search ~/.cargo/registry or target directories. The rust-knowledge MCP index
-already covers the exact resolved Cargo dependency graph.
+`rust-knowledge` is a local, Cargo-aware documentation retrieval engine for Rust
+monorepos. It answers "what API should I use / how does this crate work / where
+is this documented?" from the **exact resolved Cargo dependency universe** of a
+workspace — never by crawling `~/.cargo/registry`, `target/`, or generated files.
+It ships as a CLI (`rust-knowledge`) and an MCP server (`knowledge-mcp`).
 
-Use the MCP tools in this order:
+## Investigating Rust dependencies
 
-1. knowledge_search — search documentation (READMEs, guides, rustdoc) for APIs
+Do not recursively search `~/.cargo/registry` or target directories. The
+rust-knowledge MCP index already covers the exact resolved Cargo dependency
+graph. Use the MCP tools in this order:
+
+1. `knowledge_search` — search documentation (READMEs, guides, rustdoc) for APIs
    or conceptual questions. Prefer documentation over dependency source code.
-2. Inspect the compact previews; only doc_read the ids that look relevant.
-3. symbol_lookup for exact/near-exact symbol questions (paths, signatures,
+2. Inspect the compact previews; only `doc_read` the ids that look relevant.
+3. `symbol_lookup` for exact/near-exact symbol questions (paths, signatures,
    source spans).
 4. Retrieve dependency implementation source only when documentation is
-   insufficient, using the source_path and source_span the tools return.
+   insufficient, using the `source_path` and `source_span` the tools return.
 
-If the index is missing or stale, run: rust-knowledge index
+If the index is missing or stale, run: `rust-knowledge index`
+
+## Commands
+
+```sh
+cargo build                                   # build all crates
+cargo +nightly clippy --all-targets --all-features   # lint (nightly required)
+cargo test                                    # full suite (no nightly needed)
+cargo test -p knowledge-index --test corpus    # one integration test file
+cargo test -p knowledge-index --test corpus <name>   # one test by name
+cargo run -p knowledge-cli -- index --manifest-path ./Cargo.toml   # build index
+cargo run -p knowledge-cli -- eval evals/queries.toml              # retrieval eval
+```
+
+- **Nightly is required for clippy** (the workspace lint config uses nightly-only
+  lints) and for generating rustdoc JSON. The test suite does **not** need
+  nightly: integration tests run against a committed fixture workspace with
+  prebuilt rustdoc artifacts.
+- The index lands in `<workspace>/.rust-knowledge/` (gitignored). `--index-dir`
+  overrides it; `RUST_KNOWLEDGE_INDEX_DIR` and `RUST_KNOWLEDGE_CARGO` are the
+  env-var equivalents.
+
+## Architecture
+
+Four crates, one data flow. `knowledge-core` is the only crate the others all
+depend on; it deliberately has **no** cargo/rustdoc/tantivy/MCP dependency so a
+future vector retriever can plug in behind the same interface.
+
+```
+cargo metadata ──> CargoUniverse (exact PackageId identities, resolved graph)   knowledge-index::cargo
+rustdoc JSON ────> documented API items (symbol paths, signatures, spans)        knowledge-index::rustdoc
+README/docs ────> heading-structured chunks                                      knowledge-index::markdown
+        │
+        v
+normalized KnowledgeDocument corpus (deterministic DocumentId)                  knowledge-index::corpus
+        v
+local Tantivy index (weighted fields, filters)                                  knowledge-index::tantivy_index
+        v
+KnowledgeRetriever trait (sync)                                                 knowledge-core::query
+   ├── knowledge-cli  (bin `rust-knowledge`; clap)
+   └── knowledge-mcp (bin `knowledge-mcp`; rmcp; thin adapter, no engine deps)
+```
+
+- **`knowledge-core`**: data model (`KnowledgeDocument`, `PackageIdentity`,
+  `SourceKind`), `DocumentId`, `SearchQuery`/`SearchHit`, the `KnowledgeRetriever`
+  trait. No engine dependencies.
+- **`knowledge-index`**: ingestion + retrieval. One small module per concern
+  (`cargo`, `rustdoc`, `markdown`, `corpus`, `tantivy_index`, `store`,
+  `pipeline`, `eval`). `pipeline::index_workspace` is the end-to-end entry point
+  used by both CLI and tests.
+- **`knowledge-cli` / `knowledge-mcp`**: thin frontends over the same engine.
+
+### Key design decisions (see `docs/design.md` for full detail)
+
+- **Identity is `PackageId`, never crate name.** Two versions of one crate are
+  distinct identities. `DocumentId` is a deterministic SHA-256 over a canonical
+  identity string — stable across rebuilds, independent of insertion order.
+- **rustdoc JSON is nightly-only and versioned** (`format_version` 61). The
+  parser checks the version and fails with a diagnostic on mismatch; bump
+  `rustdoc-types` in lockstep with upstream format changes. `Crate` has no
+  `crate_name` field; item kind is the tag of `Item.inner`, not a JSON field.
+  Re-exports (`pub use`) are the primary API surface of re-export-heavy crates —
+  the walker follows them and indexes targets under the re-export path.
+- **Search is weighted lexical retrieval** (Tantivy). `symbol_path` is boosted
+  highest; identifier-looking query tokens get extra term-query boosts so exact
+  symbol queries dominate. The `body` field uses the English stemmer; identifier
+  fields stay unstemmed. `symbol_lookup` is a separate exact→last-segment→
+  conjunction path, not generic search.
+- **`evals/queries.toml` is the regression harness** for any retrieval change.
+  The integration test asserts every case passes (21/21, MRR ≈ 0.87). If you
+  change tokenization, boosts, or chunking, run the eval.
+
+## Conventions and gotchas
+
+- **Lint config mandates `#[expect(..., reason = "...")]` over `#[allow]`**
+  (`allow_attributes` / `allow_attributes_without_reason` are warn). Use
+  `#[expect(clippy::lint, reason = "...")]` for deliberate suppressions. Note
+  `#[expect]` warns if the lint doesn't actually fire — for a public item in a
+  library crate, `dead_code` never fires, so don't add an expectation for it.
+- **`clippy.toml` relaxes indexing/panic/unwrap/expect in tests, but only for
+  unit tests (`#[cfg(test)]`), not integration tests in `tests/`.** Integration
+  tests must still avoid `unwrap()`, `panic!`, and slicing/indexing — use
+  `.expect(...)`, `.get(...)`, `.first()`.
+- **The fixture workspace is its own cargo workspace**, excluded from the root
+  (`fixtures/demo-workspace`). It deliberately exercises member-vs-path-
+  dependency distinction and two versions of `base64` in one graph. Its rustdoc
+  artifacts are committed under `fixtures/demo-workspace/prebuilt-rustdoc/` so
+  tests never invoke nightly rustdoc.
+- The MCP server is wired into Claude Code via `.mcp.json` and
+  `.claude/settings.local.json` (points at `target/release/knowledge-mcp`).
+- `identity_is_locatable` in `tests/universe.rs` is environment-dependent: it
+  asserts a package's manifest exists on disk at the path cargo reports, so it
+  fails when the cargo registry cache lives under a different `$HOME` than the
+  one the test runs with. It is unrelated to code changes.
