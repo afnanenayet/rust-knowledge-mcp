@@ -101,12 +101,16 @@ Claude Code configuration (or Codex equivalent):
 The environment layer sits below the CLI in both binaries (flags always
 win): `RUST_KNOWLEDGE_INDEX_DIR` replaces `--index-dir`,
 `RUST_KNOWLEDGE_MANIFEST_PATH` replaces `--manifest-path`, and
-`RUST_KNOWLEDGE_CARGO` (or `rust-knowledge --cargo`) overrides the cargo
-binary used for metadata and rustdoc generation. `RUST_KNOWLEDGE_LOG` —
+`RUST_KNOWLEDGE_CARGO` (or `--cargo` in either binary) overrides the
+cargo binary for every cargo invocation: indexing, rustdoc generation,
+and the `cargo metadata` run that discovers the workspace when
+`--index-dir` is absent (the typical MCP deployment passes only
+`--manifest-path`, so that run happens). `RUST_KNOWLEDGE_LOG` —
 falling back to `RUST_LOG` — sets the tracing filter (`--log` and
 `rust-knowledge --verbose` override it; `-v` forces `debug`). The CLI
-logs to stdout; the MCP server logs to stderr so stdout stays the protocol
-channel. See `docs/config-reference.html` for the full reference.
+logs to stdout; the MCP server logs to stderr, and a usage error exits 1
+with its diagnostic on stderr — stdout only ever carries MCP protocol
+traffic. See `docs/config-reference.html` for the full reference.
 
 ## Workflow for coding agents (see AGENTS.md)
 

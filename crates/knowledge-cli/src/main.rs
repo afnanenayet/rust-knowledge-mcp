@@ -473,10 +473,15 @@ fn parse_source_kinds(raw: &[String]) -> anyhow::Result<Vec<knowledge_core::Sour
         .collect()
 }
 
+/// Opens the index for the search/get/symbol/eval commands. When
+/// `--index-dir` is absent, a cargo metadata run discovers the
+/// workspace — with the resolved `--cargo` binary, so the flag is
+/// honored on this spawn too.
 fn open_retriever(cli: &Cli) -> anyhow::Result<knowledge_index::TantivyRetriever> {
-    knowledge_index::open_retriever(
+    knowledge_index::open_retriever_with(
         cli.config.manifest_path.as_deref(),
         cli.config.index_dir.as_deref(),
+        cli.config.cargo.as_deref(),
     )
     .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
     .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
@@ -916,6 +921,27 @@ mod tests {
         let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
         let cli = parse_ok_with_env(&["packages"], env);
         assert_eq!(cli.config.index_dir.as_deref(), Some(Path::new("/from-env")));
+    }
+
+    #[test]
+    fn cargo_flag_reaches_the_metadata_spawn() {
+        // Pins the --cargo plumbing end to end: the flag value must reach
+        // the cargo metadata spawn that discovers the workspace when
+        // --index-dir is absent (a bad path fails the spawn instead of a
+        // silent $PATH fallback).
+        let cli = parse_ok(&[
+            "--cargo",
+            "/definitely-not-a-cargo-binary-0123456789",
+            "packages",
+        ]);
+        let error = match super::open_retriever(&cli) {
+            Err(error) => error,
+            Ok(_) => panic!("a bad --cargo must fail the metadata spawn"),
+        };
+        assert!(
+            format!("{error:#}").contains("cargo metadata failed"),
+            "the bad --cargo must fail the metadata spawn, got: {error:#}"
+        );
     }
 
     #[test]

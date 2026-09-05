@@ -118,14 +118,31 @@ pub fn index_workspace(
 }
 
 /// Opens the index at the given directory, or the workspace default.
+///
+/// Delegates to [open_retriever_with] with no explicit cargo binary:
+/// the metadata spawn then falls back to $RUST_KNOWLEDGE_CARGO and
+/// finally to cargo on $PATH.
 pub fn open_retriever(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
 ) -> Result<TantivyRetriever, IndexError> {
+    open_retriever_with(manifest_path, index_dir, None)
+}
+
+/// Like [open_retriever], with an explicit cargo binary for the
+/// `cargo metadata` run that discovers the workspace when `index_dir`
+/// is absent. Both frontends pass their resolved `--cargo` here, so
+/// every path that spawns cargo honors the flag (see
+/// [CargoUniverse::load_with] for the None fallback chain).
+pub fn open_retriever_with(
+    manifest_path: Option<&Path>,
+    index_dir: Option<&Path>,
+    cargo: Option<&Path>,
+) -> Result<TantivyRetriever, IndexError> {
     let index_dir = match index_dir {
         Some(dir) => dir.to_path_buf(),
         None => {
-            let universe = CargoUniverse::load(manifest_path)?;
+            let universe = CargoUniverse::load_with(manifest_path, cargo)?;
             default_index_dir(universe.workspace_root())
         }
     };
@@ -139,4 +156,29 @@ fn now_rfc3339() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{seconds}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::open_retriever_with;
+    use crate::error::IndexError;
+
+    /// Pins the --cargo plumbing: an explicit cargo binary must reach the
+    /// metadata spawn that discovers the workspace when --index-dir is
+    /// absent (a nonexistent path fails the spawn) instead of silently
+    /// falling back to cargo on $PATH.
+    #[test]
+    fn explicit_cargo_reaches_the_metadata_spawn() {
+        let bad_cargo = Path::new("/definitely-not-a-cargo-binary-0123456789");
+        let error = match open_retriever_with(None, None, Some(bad_cargo)) {
+            Err(error) => error,
+            Ok(_) => panic!("a bad cargo path must fail the metadata spawn"),
+        };
+        assert!(
+            matches!(error, IndexError::CargoMetadata { .. }),
+            "the bad cargo must fail the metadata spawn, got: {error:?}"
+        );
+    }
 }

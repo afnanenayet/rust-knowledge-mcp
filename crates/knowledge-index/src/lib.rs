@@ -29,5 +29,5 @@ pub mod tantivy_index;
 pub use cargo::CargoUniverse;
 pub use corpus::{CorpusOptions, CorpusReport, RustdocScope, build_corpus};
 pub use error::IndexError;
-pub use pipeline::{IndexOptions, IndexOutcome, index_workspace, open_retriever};
+pub use pipeline::{IndexOptions, IndexOutcome, index_workspace, open_retriever, open_retriever_with};
 pub use tantivy_index::TantivyRetriever;
