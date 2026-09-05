@@ -1,115 +1,137 @@
+//! CLI entry point for the `rust-knowledge` binary.
+//!
+//! The argument surface is defined by facet-derived shapes parsed by figue,
+//! replacing the previous clap derives (issue #2). Flag names, shorts,
+//! defaults and subcommand names are frozen to the historical clap surface;
+//! see `docs/config-reference.html` (regenerate with `rust-knowledge
+//! config-docs`) for the generated reference.
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use facet::Facet;
+use figue::{self as args, DriverError};
 use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
+use knowledge_index::config::{
+    Builtins,
+    parse_std_args,
+    resolve_index_dir,
+    resolve_log_filter,
+    std_argv_requests_help,
+};
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "rust-knowledge",
-    version,
-    about = "Search documentation of the resolved Cargo dependency universe of a workspace"
-)]
+const PROGRAM: &str = "rust-knowledge";
+const ABOUT: &str =
+    "Search documentation of the resolved Cargo dependency universe of a workspace";
+
+#[derive(Facet, Debug)]
 struct Cli {
     /// Path to a Cargo.toml manifest. Defaults to the current directory.
-    #[arg(long, global = true)]
+    #[facet(args::named)]
     manifest_path: Option<PathBuf>,
 
-    /// Directory for the knowledge index. Defaults to <workspace>/.rust-knowledge
-    #[arg(long, global = true)]
+    /// Directory for the knowledge index. Defaults to
+    /// <workspace>/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.
+    #[facet(args::named)]
     index_dir: Option<PathBuf>,
 
     /// Verbose logging.
-    #[arg(long, short = 'v', global = true)]
+    #[facet(args::named, args::short = 'v', default)]
     verbose: bool,
 
-    #[command(subcommand)]
+    #[facet(flatten)]
+    builtins: Builtins,
+
+    #[facet(args::subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Facet, Debug)]
+#[repr(u8)]
 enum Command {
     /// List the packages in the resolved Cargo dependency universe.
     Packages {
         /// Emit JSON (one object per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Build the normalized documentation corpus and print it (debug view).
     DumpDocs {
         /// Only documents of this package (name or name@version).
-        #[arg(long)]
+        #[facet(args::named)]
         package: Option<String>,
 
         /// Which packages get rustdoc JSON generated.
-        #[arg(long, default_value = "workspace")]
+        #[facet(args::named, default = "workspace")]
         rustdoc_scope: String,
 
         /// Read prebuilt rustdoc JSON artifacts from this directory instead
         /// of invoking cargo.
-        #[arg(long)]
+        #[facet(args::named)]
         prebuilt_rustdoc: Option<PathBuf>,
 
         /// Emit one JSON document per line.
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Build the persistent knowledge index for the workspace.
     Index {
         /// Which packages get rustdoc JSON generated.
-        #[arg(long, default_value = "workspace")]
+        #[facet(args::named, default = "workspace")]
         rustdoc_scope: String,
 
         /// Toolchain used for rustdoc generation (default: nightly).
-        #[arg(long)]
+        #[facet(args::named)]
         toolchain: Option<String>,
 
         /// Read prebuilt rustdoc JSON artifacts from this directory instead
         /// of invoking cargo.
-        #[arg(long)]
+        #[facet(args::named)]
         prebuilt_rustdoc: Option<PathBuf>,
     },
 
     /// Search the knowledge index.
     Search {
         /// Free-form query: natural language or Rust identifiers.
+        #[facet(args::positional)]
         query: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[arg(long = "package")]
+        #[facet(args::named, rename = "package", default)]
         packages: Vec<String>,
 
         /// Restrict to source kinds (rustdoc_item, rustdoc_module,
         /// crate_readme, markdown_document). Repeatable.
-        #[arg(long = "source-kind")]
+        #[facet(args::named, rename = "source-kind", default)]
         source_kinds: Vec<String>,
 
         /// Restrict to item kinds (function, struct, trait, ...). Repeatable.
-        #[arg(long = "item-kind")]
+        #[facet(args::named, rename = "item-kind", default)]
         item_kinds: Vec<String>,
 
         /// Maximum number of results.
-        #[arg(long, default_value = "8")]
+        #[facet(args::named, default = 8)]
         limit: usize,
 
         /// Emit JSON (one hit per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Retrieve one document by its stable id.
     Get {
         /// Document id (as printed by search).
+        #[facet(args::positional)]
         id: String,
 
         /// Emit the full JSON document.
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
@@ -117,33 +139,70 @@ enum Command {
     Symbol {
         /// Symbol path or last segment, e.g. demo_core::writer::Writer::flush
         /// or spawn_blocking.
+        #[facet(args::positional)]
         symbol: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[arg(long = "package")]
+        #[facet(args::named, rename = "package", default)]
         packages: Vec<String>,
 
         /// Emit JSON (one entry per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Run the retrieval evaluation set against the knowledge index.
     Eval {
         /// Path to the eval file (TOML, [[case]] entries).
+        #[facet(args::positional)]
         file: PathBuf,
     },
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = match parse_std_args::<Cli>(PROGRAM, env!("CARGO_PKG_VERSION"), ABOUT)
+        .into_result()
+    {
+        Ok(output) => output.get(),
+        Err(DriverError::Help { text, suggestion }) => {
+            // figue also reports missing required fields as Help; a genuine
+            // --help/-h exits 0 on stdout (like clap), the diagnostic path
+            // exits 2 on stderr (like clap).
+            let text = text.trim_end_matches('\n');
+            if std_argv_requests_help() {
+                println!("{text}");
+                if let Some(suggestion) = suggestion {
+                    println!("{}", suggestion.render_pretty());
+                }
+                return ExitCode::SUCCESS;
+            }
+            eprintln!("{text}");
+            if let Some(suggestion) = suggestion {
+                eprintln!("{}", suggestion.render_pretty());
+            }
+            return ExitCode::from(2);
+        }
+        Err(DriverError::Version { text }) => {
+            println!("{}", text.trim_end_matches('\n'));
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Layered resolution: --index-dir > RUST_KNOWLEDGE_INDEX_DIR > engine
+    // default (<workspace>/.rust-knowledge).
+    cli.index_dir = resolve_index_dir(cli.index_dir.take());
+
     tracing_subscriber::fmt()
-        .with_env_filter(if cli.verbose { "debug" } else { "info" })
+        .with_env_filter(resolve_log_filter(cli.verbose))
         .with_target(false)
         .compact()
         .init();
 
-    match run(cli) {
+    match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -152,20 +211,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
-        Command::Packages { json } => packages(&cli, *json),
+        Command::Packages { json } => packages(cli, *json),
         Command::DumpDocs {
             package,
             rustdoc_scope,
             prebuilt_rustdoc,
             json,
-        } => dump_docs(&cli, package, rustdoc_scope, prebuilt_rustdoc, *json),
+        } => dump_docs(cli, package, rustdoc_scope, prebuilt_rustdoc, *json),
         Command::Index {
             rustdoc_scope,
             toolchain,
             prebuilt_rustdoc,
-        } => index(&cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
+        } => index(cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
         Command::Search {
             query,
             packages,
@@ -174,7 +233,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             limit,
             json,
         } => search(
-            &cli,
+            cli,
             query,
             packages,
             source_kinds,
@@ -182,13 +241,13 @@ fn run(cli: Cli) -> anyhow::Result<()> {
             *limit,
             *json,
         ),
-        Command::Get { id, json } => get(&cli, id, *json),
+        Command::Get { id, json } => get(cli, id, *json),
         Command::Symbol {
             symbol,
             packages,
             json,
-        } => symbol_lookup(&cli, symbol, packages, *json),
-        Command::Eval { file } => eval(&cli, file),
+        } => symbol_lookup(cli, symbol, packages, *json),
+        Command::Eval { file } => eval(cli, file),
     }
 }
 
