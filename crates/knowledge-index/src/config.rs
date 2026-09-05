@@ -10,11 +10,14 @@
 //! variables over defaults — so a flag overriding an env var IS figue
 //! behavior, not an emulation.
 //!
-//! figue 4.0.5 constraint (probed, see STATUS.md): a config root must be a
-//! single level of leaf fields. A root whose fields are (or contain) plain
-//! structs — e.g. flattening a nested struct into the root — never
-//! materializes on empty argv ("missing field" errors). The defaulted
-//! `log` field below keeps the root present for every invocation.
+//! figue 4.0.5 constraint (probed, see STATUS.md): a config root
+//! materializes on empty argv only if it holds at least one defaulted
+//! non-Option leaf — figue leaves Option fields absent from the merged
+//! value, so an all-Option root fails with a "missing field" error (the
+//! only failing shape: nested struct fields, `flatten`ed ones included,
+//! materialize fine). The defaulted `log` field below satisfies it.
+//! Keeping the root a single level of leaf fields follows figue's
+//! deploy-cli recipe — a shape choice, not a figue requirement.
 
 use std::path::PathBuf;
 
