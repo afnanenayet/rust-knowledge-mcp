@@ -87,12 +87,7 @@ impl GeneratedRustdocProvider {
     }
 
     fn command(&self, args: &[String]) -> Command {
-        let cargo = self.resolved_cargo();
-        let resolved = cargo.resolved();
-        let mut cmd = Command::new(&resolved.program);
-        for arg in &resolved.pre_args {
-            cmd.arg(arg);
-        }
+        let mut cmd = self.resolved_cargo().command();
         for arg in args {
             cmd.arg(arg);
         }

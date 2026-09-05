@@ -22,7 +22,12 @@
 //!    active one. The `+toolchain` argument is suppressed here: rustup
 //!    returns the concrete toolchain binary — not the rustup proxy — which
 //!    rejects the proxy-only `+<toolchain>` argument, and the lookup itself
-//!    already pins the toolchain.
+//!    already pins the toolchain. Because that concrete binary resolves
+//!    rustc/rustdoc through `PATH`, the invocation also carries the
+//!    toolchain's bin directory to prepend to the spawned process's
+//!    `PATH` — the environment the rustup proxy would otherwise prepare
+//!    (without it, nightly cargo run with a stable rustdoc first on
+//!    `PATH` fails on `-Zunstable-options`).
 //! 4. `$CARGO_HOME/bin/cargo`, computed with the `home` crate — the library
 //!    cargo itself uses — so a relocated `CARGO_HOME` is honored exactly as
 //!    cargo honors it, with `$HOME/.cargo` as the default.
@@ -45,7 +50,7 @@
 //! all when tiers 1 or 2 win.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -67,7 +72,8 @@ pub enum CargoSource {
 }
 
 /// A resolved cargo invocation: the binary plus the arguments that must
-/// precede any real cargo arguments (at most one `+<toolchain>`).
+/// precede any real cargo arguments (at most one `+<toolchain>`) and any
+/// environment the spawn needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedCargo {
     /// Program to spawn: a path for tiers 1-4, bare `cargo` for tier 5.
@@ -76,6 +82,14 @@ pub struct ResolvedCargo {
     /// `["+nightly"]`. Empty when no toolchain was requested or when the
     /// source already pins the toolchain (tiers 1 and 3).
     pub pre_args: Vec<String>,
+    /// Directory to prepend to the spawned process's `PATH` so the cargo
+    /// finds the rustc/rustdoc of the toolchain it belongs to. Set only by
+    /// the rustup tier: it spawns the concrete toolchain binary directly,
+    /// and a toolchain cargo resolves rustc and rustdoc through `PATH` —
+    /// the rustup proxy would otherwise have prepared this environment
+    /// (verified: nightly cargo spawned without this documents with the
+    /// stable rustdoc and fails on `-Zunstable-options`).
+    pub path_prepend: Option<PathBuf>,
     /// Which precedence tier produced this invocation.
     pub source: CargoSource,
 }
@@ -107,6 +121,7 @@ pub fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
         return ResolvedCargo {
             program: PathBuf::from(explicit),
             pre_args: Vec::new(),
+            path_prepend: None,
             source: CargoSource::Explicit,
         };
     }
@@ -128,16 +143,26 @@ pub fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
         return ResolvedCargo {
             program: PathBuf::from(cargo_env),
             pre_args,
+            path_prepend: None,
             source: CargoSource::CargoEnv,
         };
     }
     // Tier 3: the cargo that goes with the requested (or active) toolchain.
+    // The spawned binary is the concrete toolchain cargo, which resolves
+    // rustc/rustdoc through PATH; carry the toolchain's bin directory (the
+    // parent of the resolved binary) so spawns can mirror the environment
+    // the rustup proxy would have prepared.
     if let Some(path) = (inputs.rustup_which)(inputs.toolchain)
         && !path.as_os_str().is_empty()
     {
+        let path_prepend = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(Path::to_path_buf);
         return ResolvedCargo {
             program: path,
             pre_args: Vec::new(),
+            path_prepend,
             source: CargoSource::Rustup,
         };
     }
@@ -146,6 +171,7 @@ pub fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
         return ResolvedCargo {
             program: path,
             pre_args,
+            path_prepend: None,
             source: CargoSource::CargoHome,
         };
     }
@@ -153,6 +179,7 @@ pub fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
     ResolvedCargo {
         program: PathBuf::from("cargo"),
         pre_args,
+        path_prepend: None,
         source: CargoSource::Path,
     }
 }
@@ -195,9 +222,59 @@ impl CachedCargo {
     /// The `cargo --version` output of the resolved binary, spawned at
     /// most once per process per requested toolchain.
     pub fn version(&self) -> Option<String> {
-        self.version
-            .get_or_init(|| query_version(&self.resolved))
-            .clone()
+        self.version.get_or_init(|| self.query_version()).clone()
+    }
+
+    /// A `Command` for the resolved invocation: the binary, any
+    /// `+<toolchain>` pre-args, and — when the rustup tier won — the
+    /// toolchain's bin directory prepended to the child's `PATH`, so the
+    /// concrete toolchain cargo finds its matching rustc/rustdoc instead
+    /// of whatever the ambient `PATH` resolves first (the environment the
+    /// rustup proxy prepares itself). Other tiers spawn binaries that do
+    /// their own toolchain handling, so they carry no `PATH` requirement.
+    pub fn command(&self) -> Command {
+        let resolved = &self.resolved;
+        let mut cmd = Command::new(&resolved.program);
+        for arg in &resolved.pre_args {
+            cmd.arg(arg);
+        }
+        if let Some(dir) = &resolved.path_prepend {
+            // Split the ambient PATH into segments, prepend the toolchain
+            // bin dir, and re-join: join_paths validates segments, so the
+            // whole path-list must never be passed as one segment.
+            let mut segments: Vec<PathBuf> = vec![dir.clone()];
+            if let Some(existing) = std::env::var_os("PATH") {
+                segments.extend(std::env::split_paths(&existing));
+            }
+            // join_paths only fails when a segment contains the platform
+            // list separator (a malformed PATH entry); skip the prepend
+            // rather than fail the spawn.
+            match std::env::join_paths(&segments) {
+                Ok(path) => {
+                    debug!(
+                        dir = %dir.display(),
+                        "prepending the toolchain bin dir to the cargo child's PATH"
+                    );
+                    cmd.env("PATH", path);
+                }
+                Err(cause) => {
+                    debug!(error = %cause, "could not join PATH; spawning with ambient PATH");
+                }
+            }
+        }
+        cmd
+    }
+
+    /// `cargo --version` of the resolved binary, for index provenance.
+    fn query_version(&self) -> Option<String> {
+        let mut cmd = self.command();
+        cmd.arg("--version");
+        let output = cmd.output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!version.is_empty()).then_some(version)
     }
 }
 
@@ -296,21 +373,6 @@ fn cargo_home_bin() -> Option<PathBuf> {
         .join("bin")
         .join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
     bin.is_file().then_some(bin)
-}
-
-/// `cargo --version` of the resolved binary, for index provenance.
-fn query_version(resolved: &ResolvedCargo) -> Option<String> {
-    let mut cmd = Command::new(&resolved.program);
-    for arg in &resolved.pre_args {
-        cmd.arg(arg);
-    }
-    cmd.arg("--version");
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!version.is_empty()).then_some(version)
 }
 
 #[cfg(test)]
@@ -462,6 +524,12 @@ mod tests {
             "rustup already pinned the toolchain; +toolchain would be rejected \
              by the concrete toolchain binary"
         );
+        assert_eq!(
+            resolved.path_prepend.as_deref(),
+            Some(std::path::Path::new("/rustup/nightly/bin")),
+            "the concrete toolchain cargo must be spawned with its own bin \
+             dir first on PATH so it finds the matching rustc/rustdoc"
+        );
         assert_eq!(probe.calls(), vec![Some("nightly".to_string())]);
     }
 
@@ -471,7 +539,50 @@ mod tests {
         let resolved = resolve_case(None, None, None, &probe, None);
         assert_eq!(resolved.source, CargoSource::Rustup);
         assert!(resolved.pre_args.is_empty());
+        assert_eq!(
+            resolved.path_prepend.as_deref(),
+            Some(std::path::Path::new("/rustup/stable/bin"))
+        );
         assert_eq!(probe.calls(), vec![None]);
+    }
+
+    #[test]
+    fn only_the_rustup_tier_carries_a_path_prepend() {
+        // The concrete toolchain binary needs its bin dir prepended to
+        // PATH; every other tier spawns a binary that does its own
+        // toolchain handling (explicit binary, the invoking cargo, the
+        // $CARGO_HOME proxy, or a PATH lookup).
+        let probe = RustupProbe::new(Some(PathBuf::from("/rustup/nightly/bin/cargo")));
+        assert!(
+            resolve_case(None, Some("/opt/custom/cargo"), None, &probe, None)
+                .path_prepend
+                .is_none(),
+            "explicit override: the caller owns the whole environment"
+        );
+        assert!(
+            resolve_case(None, None, Some("/invoking/cargo"), &probe, None)
+                .path_prepend
+                .is_none(),
+            "$CARGO: the invoking cargo already prepared the environment"
+        );
+        let rustup = resolve_case(None, None, None, &probe, None);
+        assert_eq!(
+            rustup.path_prepend.as_deref(),
+            Some(std::path::Path::new("/rustup/nightly/bin"))
+        );
+        let no_rustup = RustupProbe::new(None);
+        assert!(
+            resolve_case(None, None, None, &no_rustup, Some(PathBuf::from("/home/u/.cargo/bin/cargo")))
+                .path_prepend
+                .is_none(),
+            "$CARGO_HOME/bin/cargo is the rustup proxy; it prepares its own env"
+        );
+        assert!(
+            resolve_case(None, None, None, &no_rustup, None)
+                .path_prepend
+                .is_none(),
+            "PATH cargo: resolved by the OS at spawn time"
+        );
     }
 
     #[test]

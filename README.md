@@ -66,9 +66,51 @@ Claude Code configuration (or Codex equivalent):
       }
     }
 
-`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir`; `RUST_KNOWLEDGE_CARGO`
-overrides the cargo binary used for generation. Logs go to stderr; stdout
-is the MCP channel.
+`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir`. Logs go to stderr;
+stdout is the MCP channel.
+
+## Cargo binary resolution
+
+Every place the engine spawns cargo — `cargo metadata` for the dependency
+universe and `cargo rustdoc` for JSON generation — resolves the binary
+through one shared resolver (`knowledge_index::cargo::resolve`), so a
+single index build can never mix two different cargo binaries. The
+precedence order (first match wins):
+
+1. `RUST_KNOWLEDGE_CARGO` — explicit escape hatch, unchanged. Wins for both
+   call sites and suppresses the `+toolchain` argument: the caller
+   controls the whole toolchain, including the rustdoc on PATH.
+2. `$CARGO` — set by cargo when it invokes us (build scripts, cargo
+   plugins, `cargo run`); honored for un-toolchained lookups so the engine
+   stays consistent with the cargo that invoked it. When a toolchain is
+   requested this tier is skipped: `$CARGO` always points at the invoking
+   toolchain's concrete binary, which rejects rustup's proxy-only
+   `+toolchain` argument.
+3. Toolchain-consistent cargo via rustup: `rustup which --toolchain <t>
+   cargo` for the requested toolchain, `rustup which cargo` for the active
+   one. The `+toolchain` argument is suppressed here because rustup
+   already pinned the toolchain. The toolchain's bin directory is
+   prepended to the spawned process's `PATH` (mirroring what the rustup
+   proxy does), so the concrete toolchain cargo finds its matching
+   rustc/rustdoc. Degrades silently to the next tier when rustup is absent
+   or lacks the toolchain.
+4. `$CARGO_HOME/bin/cargo` — computed with the `home` crate, the library
+   cargo itself uses, so a relocated `CARGO_HOME` is honored exactly the
+   way cargo honors it; `$HOME/.cargo` is the default.
+5. Plain `cargo` from PATH, resolved at spawn time.
+
+When a toolchain is requested, tiers 4 and 5 keep the `+toolchain`
+argument: those locations usually hold the rustup proxy, which understands
+it (a non-proxy binary fails either way, since rustdoc JSON needs nightly).
+
+Consequences worth knowing:
+
+- Tier 3 preempts a PATH cargo whenever rustup is installed (for example a
+  Nix shell that ships its own cargo alongside rustup). The escape hatches
+  are `$CARGO` and `RUST_KNOWLEDGE_CARGO`.
+- Empty or whitespace-only environment values count as unset.
+- The chosen binary is logged (tracing) on first resolution and recorded in
+  the index provenance (`index-meta.json` → `cargo_version`).
 
 ## Workflow for coding agents (see AGENTS.md)
 

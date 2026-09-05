@@ -65,6 +65,9 @@ impl CargoUniverse {
         // The shared resolver picks the cargo binary (see `discovery`);
         // metadata never requests a toolchain, so the resolved invocation
         // carries no pre-arguments and cargo_path captures the full choice.
+        // The invocation's PATH prepend (rustup tier) is irrelevant here:
+        // `cargo metadata` never invokes rustc, and MetadataCommand has no
+        // way to inject a child environment.
         cmd.cargo_path(&cargo.resolved().program);
         if let Some(path) = manifest_path {
             cmd.manifest_path(path);
