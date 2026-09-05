@@ -767,6 +767,7 @@ dependencies = [
  "knowledge-core",
  "knowledge-index",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
