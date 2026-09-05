@@ -19,10 +19,19 @@ and compare.
 ## Running
 
 ```sh
-cargo bench -p knowledge-index                  # full suite
-cargo bench -p knowledge-index -- symbol_lookup # one group (regex filter)
-cargo bench -p knowledge-index -- --list        # list bench ids
+cargo bench -p knowledge-index                                 # full suite
+cargo bench -p knowledge-index --bench engine -- symbol_lookup # one group (regex filter)
+cargo bench -p knowledge-index --bench engine -- --list        # list bench ids
 ```
+
+The `--bench engine` scoping in the last two commands matters for
+*every* form that passes arguments after `--`: cargo forwards those to
+**every** bench target, and the package's implicit lib bench target — a
+libtest harness, run before the engine suite — rejects criterion's own
+flags (`error: Unrecognized option: 'save-baseline'`, exit 101). Plain
+regex filters happen to survive unscoped (libtest reads them as
+test-name filters), but naming the target keeps every trailing-argument
+form safe and skips the lib target's unittest pass.
 
 Stable Rust is enough (prebuilt artifacts; nightly is only needed for the
 repo's clippy gate). A full run takes a few minutes on a laptop-class
@@ -32,15 +41,18 @@ tradeoff.
 ### Comparing against a baseline
 
 ```sh
-cargo bench -p knowledge-index -- --save-baseline before
+cargo bench -p knowledge-index --bench engine -- --save-baseline before
 # ...make the change...
-cargo bench -p knowledge-index -- --baseline before
+cargo bench -p knowledge-index --bench engine -- --baseline before
 ```
 
+Without the `--bench engine` scoping both commands die in the package's
+implicit lib bench target (exit 101, `Unrecognized option:
+'save-baseline'`) before the engine suite ever runs — see Running.
 `--baseline` fails loudly if a saved baseline is missing;
-`--baseline-lenient` runs without comparing. Criterion also compares
-against the *previous run* automatically. Results and plots land under
-`target/criterion/<group>/<bench>/`.
+`--baseline-lenient` runs without comparing (same scoping). Criterion
+also compares against the *previous run* automatically. Results and
+plots land under `target/criterion/<group>/<bench>/`.
 
 ### Reading the output
 
@@ -59,6 +71,7 @@ treat raw means as noisy until two runs agree.
 | `corpus/build_full` | the whole corpus stage: all artifacts + all markdown (fixture **and** registry READMEs) + deterministic sort | slower `rust-knowledge index` overall |
 | `index_build/from_scratch_dir` | `build_index` into a fresh dir: segment writes, commit, multithreaded merge (`wait_merging_threads`), `corpus.jsonl` + `index-meta.json` writes — docs/sec includes commit by design | slower index rebuilds and server cold starts |
 | `search_eval/case_NN_<slug>` | one eval query, the exact `SearchQuery` `eval::run_eval` would issue (same text, same limit) | slower `knowledge_search` for that query shape (known symbol, natural language, version-sensitive) |
+| `search_eval/package_filtered` | the first eval query plus `packages: ["demo-core"]` — the `knowledge_search` packages-filter path (`filter_clause`: a BooleanQuery MUST over the package term) that the unfiltered eval queries never exercise | slower filtered searches; compare with the unfiltered first-case bench to isolate the filter-clause share |
 | `search_eval/mixed_workload` | all 21 eval queries per iteration (queries/sec) | the end-to-end search workload got slower |
 | `symbol_lookup/exact` | fully-qualified symbol hit via the untokenized `symbol_exact` term | slower exact-path lookups |
 | `symbol_lookup/bare_last_segment` | bare identifier ranked via the `symbol_last` term | slower "just the name" lookups |
@@ -78,8 +91,11 @@ The suite deliberately uses two setting profiles:
   `doc_get`): sample_size 100, measurement 3 s, warm-up 1 s. These are the
   steadiest benches (warm page cache, no I/O): expect a few percent
   run-to-run scatter on a quiet laptop. `startup` uses the same sample
-  size with measurement 5 s: one open+first-query iteration is ~0.6 ms,
-  and 100 samples of that do not fit in 3 s.
+  size with measurement 5 s: criterion times *many* iterations per
+  sample, and one open+first-query iteration costs ~0.6 ms, so the 3 s
+  budget was too short to complete 100 samples — criterion warned it was
+  under-sampling (fewer completed samples mean wider confidence
+  intervals), hence the extra headroom.
 * **I/O-bound build groups**: sample_size 10, warm-up 1 s. `corpus` gets
   measurement 10 s; `index_build` — the slowest, noisiest bench in the
   suite, with hundreds-of-ms iterations dominated by disk I/O and

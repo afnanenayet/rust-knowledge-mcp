@@ -8,9 +8,12 @@
 //! environment-configured index dir). No network, no nightly toolchain.
 //!
 //! Run with `cargo bench -p knowledge-index`; filter with
-//! `cargo bench -p knowledge-index -- <regex>`; list with `-- --list`.
-//! See `benches/README.md` for per-bench documentation, baseline
-//! comparison and noise guidance.
+//! `cargo bench -p knowledge-index --bench engine -- <regex>`; list
+//! with `--bench engine -- --list` (the scoping keeps trailing
+//! arguments away from the package's libtest-harness lib bench target,
+//! which rejects criterion's own flags — see the README's Running
+//! section). See `benches/README.md` for per-bench documentation,
+//! baseline comparison and noise guidance.
 //!
 //! One process, one [`BenchState`]: the expensive deterministic setup
 //! (`cargo metadata`, corpus build, persistent index build) happens once
@@ -175,11 +178,16 @@ fn index_build_benches(c: &mut Criterion, state: &BenchState) {
 /// and version-sensitive lookups. Each case is benched on its own (stable
 /// ids; regressions stay attributable to a query shape) and once together
 /// as the mixed workload (all 21 queries per iteration, queries/sec).
+/// One extra bench covers the packages-filter path: the first eval query
+/// with `packages: ["demo-core"]` — the `filter_clause` (BooleanQuery
+/// MUST over the package term) cost every filtered `knowledge_search`
+/// call adds on top of the same text/limit its unfiltered twin pays.
 ///
 /// Real workload: every `knowledge_search` MCP tool call / CLI search,
 /// with the exact `SearchQuery` `eval::run_eval` would issue (same text,
-/// same limit). A regression means slower answers for every agent using
-/// the server.
+/// same limit); the filtered twin matches the MCP tool's packages
+/// parameter instead. A regression means slower answers for every agent
+/// using the server.
 ///
 /// Noise factors: essentially pure CPU (query construction, tantivy
 /// search, snippet generation) on a warm page cache — the steadiest
@@ -201,6 +209,21 @@ fn search_benches(c: &mut Criterion, state: &BenchState) {
             })
         });
     }
+
+    // The packages-filter path: the first eval query restricted to
+    // demo-core — the filter_clause cost (BooleanQuery MUST over the
+    // package term) that knowledge_search's packages parameter adds.
+    // Comparing against the unfiltered first-case bench isolates the
+    // filter's share of the cost.
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("package_filtered", |b| {
+        b.iter(|| {
+            let hits = retriever
+                .search(&state.filtered_query)
+                .expect("filtered fixture search");
+            black_box(hits.len())
+        })
+    });
 
     // The mixed workload: all 21 queries per iteration.
     group.throughput(Throughput::Elements(state.cases.len() as u64));

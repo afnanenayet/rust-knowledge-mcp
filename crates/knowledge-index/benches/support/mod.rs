@@ -104,6 +104,11 @@ pub struct BenchState {
     pub cases: Vec<CaseQuery>,
     /// The first eval query, for the startup bench's first-answer half.
     pub first_query: SearchQuery,
+    /// The first eval query restricted to `demo-core`: the
+    /// `knowledge_search` packages-filter path (`filter_clause`'s
+    /// BooleanQuery MUST over the package term), validated in setup to
+    /// return demo-core hits.
+    pub filtered_query: SearchQuery,
     /// Fixed document id for the doc-get bench (deterministic SHA-256 of a
     /// known fixture symbol).
     pub get_id: DocumentId,
@@ -227,6 +232,18 @@ pub fn build_state() -> BenchState {
     let first_case = cases.first().expect("eval set keeps its 21 cases");
     let first_query = first_case.query.clone();
 
+    // --- the packages-filter search query ---
+    // Same text and limit as the first eval query, restricted to
+    // demo-core: the filter_clause path (BooleanQuery MUST over the
+    // package term) that knowledge_search's packages parameter adds.
+    // The unfiltered first case is its twin bench, so the pair
+    // isolates the filter's cost.
+    let filtered_query = SearchQuery {
+        packages: vec!["demo-core".to_string()],
+        ..first_case.query.clone()
+    };
+    let filtered_hits = expect_package_hits(&retriever, &filtered_query, "demo-core");
+
     // --- symbol_lookup inputs, one per path, validated now ---
     let symbol_exact = SymbolQuery::new("demo_core::encoding::encode_urlsafe");
     let symbol_last_segment = SymbolQuery::new("encode_urlsafe");
@@ -251,7 +268,7 @@ pub fn build_state() -> BenchState {
     eprintln!(
         "bench setup: {} packages, {} rustdoc artifacts, {} markdown files, \
         {} documents, {} eval cases; symbol_lookup hits exact/last/conjunction: \
-        {}/{}/{}",
+        {}/{}/{}; filtered demo-core search hits: {}",
         report.packages,
         rustdoc_inputs.len(),
         markdown_inputs.len(),
@@ -260,6 +277,7 @@ pub fn build_state() -> BenchState {
         exact_hits,
         last_hits,
         conjunction_hits,
+        filtered_hits,
     );
 
     BenchState {
@@ -277,6 +295,7 @@ pub fn build_state() -> BenchState {
         symbol_last_segment,
         symbol_conjunction,
         first_query,
+        filtered_query,
     }
 }
 
@@ -288,6 +307,23 @@ fn expect_symbol_hits(retriever: &TantivyRetriever, query: &SymbolQuery) -> usiz
         .expect("symbol lookup runs against the persistent fixture index");
     hits.first()
         .expect("symbol lookup must return fixture hits");
+    hits.len()
+}
+
+/// Runs one package-filtered search at setup and fails loudly when it
+/// returns no hit from the filtered package, so the filtered bench
+/// never silently measures an empty result set.
+fn expect_package_hits(
+    retriever: &TantivyRetriever,
+    query: &SearchQuery,
+    package: &str,
+) -> usize {
+    let hits = retriever
+        .search(query)
+        .expect("filtered search runs against the persistent fixture index");
+    hits.iter()
+        .find(|h| h.package_name == package)
+        .expect("filtered search must return hits from the filtered package");
     hits.len()
 }
 
