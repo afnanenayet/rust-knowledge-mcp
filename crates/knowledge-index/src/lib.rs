@@ -3,6 +3,7 @@
 //! Layout (one small module per concern):
 //!
 //! * [cargo] - the resolved package universe from cargo metadata.
+//! * [config] - shared, facet-derived configuration types parsed by figue.
 //! * [error] - typed errors with package/command/path context.
 //! * [rustdoc] - rustdoc JSON generation (behind a provider interface) and
 //!   normalization into [knowledge_core::KnowledgeDocument]s.
@@ -15,6 +16,7 @@
 //! * [eval] - retrieval evaluation over a committed query set.
 
 pub mod cargo;
+pub mod config;
 pub mod corpus;
 pub mod error;
 pub mod eval;
