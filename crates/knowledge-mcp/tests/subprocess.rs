@@ -2,18 +2,15 @@
 //! the way a globally registered client does — zero arguments, working
 //! directory inside the workspace — and talk MCP over its stdio with the
 //! rmcp client. Also pins the two fail-fast error contracts (no workspace
-//! inferable; workspace without an index) and the explicit `--index-dir` /
-//! `RUST_KNOWLEDGE_INDEX_DIR` paths, which must stay cargo-free.
+//! inferable; workspace without an index) and the explicit `--manifest-path`
+//! / `--index-dir` / `RUST_KNOWLEDGE_INDEX_DIR` paths, of which the
+//! index-dir forms must stay cargo-free.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use knowledge_index::CargoUniverse;
-use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
-use knowledge_index::rustdoc::PrebuiltRustdocProvider;
-use knowledge_index::store::IndexMeta;
-use knowledge_index::tantivy_index::build_index;
+use knowledge_index::{IndexOptions, IndexOutcome, RustdocScope, index_workspace};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock};
 use rmcp::{ClientHandler, RoleClient, ServiceExt, service::RunningService};
 use serde_json::{Value, json};
@@ -31,38 +28,22 @@ fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/demo-workspace")
 }
 
-/// Builds the fixture corpus (committed prebuilt rustdoc; no nightly) into
-/// the given directory, exactly the way `rust-knowledge index` would.
-fn build_fixture_index(dir: &Path) {
-    let universe =
-        CargoUniverse::load(Some(&fixture_dir().join("Cargo.toml"))).expect("cargo metadata");
-    let provider = PrebuiltRustdocProvider {
-        dir: fixture_dir().join("prebuilt-rustdoc"),
-    };
-    let (documents, report) = build_corpus(
-        &universe,
-        &provider,
-        &CorpusOptions {
+/// Builds the fixture index through the engine's own end-to-end entry
+/// point (`index_workspace`; committed prebuilt rustdoc, so no nightly) so
+/// tests serve exactly what `rust-knowledge index` produces. `None` lands
+/// at the default `<workspace>/.rust-knowledge` output location.
+fn build_fixture_index(index_dir: Option<&Path>) -> IndexOutcome {
+    index_workspace(
+        Some(&fixture_dir().join("Cargo.toml")),
+        index_dir,
+        &IndexOptions {
             rustdoc_scope: RustdocScope::All,
+            toolchain: None,
+            prebuilt_rustdoc: Some(fixture_dir().join("prebuilt-rustdoc")),
+            ..IndexOptions::default()
         },
     )
-    .expect("corpus");
-    let meta = IndexMeta {
-        schema_version: IndexMeta::supported_schema(),
-        workspace_root: universe.workspace_root().to_path_buf(),
-        lock_hash: universe.lock_hash(),
-        metadata_fingerprint: universe.fingerprint(),
-        cargo_version: report.cargo_version.clone(),
-        toolchain: None,
-        rustdoc_format_version: report.rustdoc_format_version,
-        rustdoc_scope: "All".into(),
-        package_count: report.packages,
-        document_count: documents.len(),
-        built_at: "test".into(),
-        skipped: Vec::new(),
-        warnings: Vec::new(),
-    };
-    build_index(dir, &documents, &meta).expect("build index");
+    .expect("index_workspace")
 }
 
 /// Removes the fixture's default index directory on drop, so even a
@@ -75,8 +56,22 @@ impl Drop for FixtureIndexCleanup {
     }
 }
 
+/// Serializes the tests that build and clean the fixture's default index
+/// directory (`<fixture>/.rust-knowledge`): the zero-arg inference test
+/// and the explicit-manifest test both use it, and this binary's tests run
+/// in parallel threads. A `tokio::sync::Mutex` because the guard is held
+/// across the test's await points.
+static FIXTURE_INDEX_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn fixture_index_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    FIXTURE_INDEX_LOCK.lock().await
+}
+
 /// Spawns the built binary with a scrubbed environment: host
-/// `RUST_KNOWLEDGE_*` settings must not skew the child's resolution.
+/// `RUST_KNOWLEDGE_*` settings must not skew the child's resolution or its
+/// log output — the child reads `RUST_KNOWLEDGE_LOG` for its tracing level,
+/// so a host value like `error` or `off` would silence the startup lines
+/// these tests pin (and make log-absence assertions pass vacuously).
 fn spawn_server(args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Child {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_knowledge-mcp"));
     cmd.args(args)
@@ -85,7 +80,8 @@ fn spawn_server(args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Child {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("RUST_KNOWLEDGE_INDEX_DIR")
-        .env_remove("RUST_KNOWLEDGE_CARGO");
+        .env_remove("RUST_KNOWLEDGE_CARGO")
+        .env_remove("RUST_KNOWLEDGE_LOG");
     for (key, value) in env {
         cmd.env(key, value);
     }
@@ -163,12 +159,21 @@ fn dir_token(dir: &Path) -> String {
 #[tokio::test]
 async fn zero_args_infers_the_workspace_from_a_member_subdir() {
     // The default index location is a shared, gitignored directory: build
-    // it fresh and remove it on unwind. This is the only test in this
-    // binary that touches it.
+    // it fresh and remove it on unwind. The explicit-manifest test shares
+    // it; the lock serializes the two (this binary's tests run in parallel).
+    let _guard = fixture_index_lock().await;
     let index_dir = fixture_dir().join(".rust-knowledge");
     drop(std::fs::remove_dir_all(&index_dir));
     let _cleanup = FixtureIndexCleanup(index_dir.clone());
-    build_fixture_index(&index_dir);
+    // `None` = the engine's own default output location, so serving it also
+    // pins that what `rust-knowledge index` writes by default is exactly
+    // what a zero-arg server finds.
+    let outcome = build_fixture_index(None);
+    assert!(
+        outcome.index_dir.ends_with("fixtures/demo-workspace/.rust-knowledge"),
+        "index_workspace must default to <workspace>/.rust-knowledge, got {}",
+        outcome.index_dir.display()
+    );
 
     let child = spawn_server(&[], &fixture_dir().join("crates/demo-app"), &[]);
     let stderr = tokio::time::timeout(STEP_TIMEOUT, async {
@@ -185,7 +190,11 @@ async fn zero_args_infers_the_workspace_from_a_member_subdir() {
             .expect("search call");
         let hits = search_hits(&result);
         let top = hits.first().expect("top hit");
-        assert_eq!(top["package"], "demo-core", "hits: {hits:?}");
+        assert_eq!(
+            top.get("package"),
+            Some(&json!("demo-core")),
+            "hits: {hits:?}"
+        );
 
         client.cancel().await.expect("cancel client");
         let (stderr, status) = collect_exit(child).await;
@@ -211,6 +220,10 @@ async fn zero_args_infers_the_workspace_from_a_member_subdir() {
 
 /// Failure mode A: no `Cargo.toml` at or above cwd → refuse to serve, name
 /// the cwd, and show both fixes. Must exit promptly rather than hang.
+///
+/// Assumes the OS temp tree is not inside a cargo workspace (true for
+/// standard TMPDIR setups); if it ever were, this test would fail
+/// spuriously rather than silently.
 #[tokio::test]
 async fn no_manifest_ancestor_fails_fast_with_the_fix() {
     let cwd = tempfile::tempdir().expect("tempdir");
@@ -281,7 +294,7 @@ async fn workspace_without_index_names_the_rebuild_command() {
 #[tokio::test]
 async fn explicit_index_dir_serves_from_a_foreign_cwd() {
     let index = tempfile::tempdir().expect("index tempdir");
-    build_fixture_index(index.path());
+    build_fixture_index(Some(index.path()));
     let cwd = tempfile::tempdir().expect("foreign cwd");
     let index_arg = index
         .path()
@@ -327,7 +340,7 @@ async fn explicit_index_dir_serves_from_a_foreign_cwd() {
 #[tokio::test]
 async fn index_dir_env_var_serves_from_a_foreign_cwd() {
     let index = tempfile::tempdir().expect("index tempdir");
-    build_fixture_index(index.path());
+    build_fixture_index(Some(index.path()));
     let cwd = tempfile::tempdir().expect("foreign cwd");
     let index_env = index
         .path()
@@ -356,4 +369,59 @@ async fn index_dir_env_var_serves_from_a_foreign_cwd() {
     })
     .await
     .expect("env-index server answers within timeout");
+}
+
+/// Explicit `--manifest-path` from a cwd with no workspace around it: the
+/// flag must resolve the workspace (and its default index dir) without cwd
+/// inference. Pins `--manifest-path` > cwd inference — reordering the
+/// resolution arms so an explicit manifest still triggered the cwd walk
+/// (which cannot succeed from this cwd) would break this test.
+#[tokio::test]
+async fn explicit_manifest_path_serves_from_a_foreign_cwd() {
+    // Shares the fixture's default index dir with the zero-arg test; the
+    // lock serializes the two.
+    let _guard = fixture_index_lock().await;
+    let index_dir = fixture_dir().join(".rust-knowledge");
+    drop(std::fs::remove_dir_all(&index_dir));
+    let _cleanup = FixtureIndexCleanup(index_dir.clone());
+    build_fixture_index(None);
+
+    let manifest_arg = fixture_dir()
+        .join("Cargo.toml")
+        .to_str()
+        .expect("manifest path is utf-8")
+        .to_string();
+    let cwd = tempfile::tempdir().expect("foreign cwd");
+
+    let child = spawn_server(&["--manifest-path", manifest_arg.as_str()], cwd.path(), &[]);
+    let stderr = tokio::time::timeout(STEP_TIMEOUT, async {
+        let (client, child) = connect(child).await;
+        let tools = client.list_tools(None).await.expect("list tools");
+        assert_eq!(tools.tools.len(), 3, "tool set: {:?}", tools.tools);
+
+        let result = client
+            .call_tool(tool_params(
+                "knowledge_search",
+                json!({"query": "write_all"}),
+            ))
+            .await
+            .expect("search call");
+        assert!(!search_hits(&result).is_empty(), "expected hits");
+
+        client.cancel().await.expect("cancel client");
+        let (stderr, status) = collect_exit(child).await;
+        assert!(status.success(), "server must exit cleanly: {stderr}");
+        stderr
+    })
+    .await
+    .expect("explicit-manifest server answers within timeout");
+
+    assert!(
+        stderr.contains("explicit --manifest-path"),
+        "startup log must mark the manifest as explicit: {stderr}"
+    );
+    assert!(
+        !stderr.contains("inferred from cwd"),
+        "an explicit manifest must skip cwd inference: {stderr}"
+    );
 }

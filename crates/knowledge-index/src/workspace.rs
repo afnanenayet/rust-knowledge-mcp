@@ -53,8 +53,11 @@ mod tests {
 
     #[test]
     fn none_found_without_manifest_anywhere_above() {
-        // A tempdir has no Cargo.toml at or above it (the OS temp tree is
-        // not a cargo workspace), so the walk exhausts the ancestors.
+        // Assumes the OS temp tree is not inside a cargo workspace (true
+        // for standard TMPDIR setups): a tempdir then has no Cargo.toml at
+        // or above it and the walk exhausts the ancestors. If TMPDIR ever
+        // pointed inside a workspace, this would fail spuriously rather
+        // than silently.
         let start = tempfile::tempdir().expect("tempdir");
         assert_eq!(nearest_manifest(start.path()), None);
     }
