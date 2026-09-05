@@ -5,3 +5,6 @@
 # Generated knowledge index (never commit index data)
 .rust-knowledge/
 **/.rust-knowledge/
+
+# Local Claude Code MCP wiring (contains machine-specific absolute paths)
+.mcp.json
