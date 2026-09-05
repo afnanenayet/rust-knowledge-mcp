@@ -75,16 +75,18 @@ saved baselines — that file is the stable workload contract.
 The suite deliberately uses two setting profiles:
 
 * **CPU-bound retrieval groups** (`search_eval`, `symbol_lookup`,
-  `doc_get`, `startup`): sample_size 100, measurement 3 s, warm-up 1 s.
-  These are the steadiest benches (warm page cache, no I/O): expect a few
-  percent run-to-run scatter on a quiet laptop.
-* **I/O-bound build groups** (`corpus`, `index_build`): sample_size 10,
-  measurement 10 s, warm-up 1 s. Single iterations are tens to hundreds of
-  milliseconds and variance is dominated by disk I/O and, for
-  `index_build`, tantivy's multithreaded segment merges — expect
-  double-digit-percent scatter *between machines* and several percent
-  between runs. Fewer, longer samples keep the wall-clock cost practical
-  without hiding the stage costs.
+  `doc_get`): sample_size 100, measurement 3 s, warm-up 1 s. These are the
+  steadiest benches (warm page cache, no I/O): expect a few percent
+  run-to-run scatter on a quiet laptop. `startup` uses the same sample
+  size with measurement 5 s: one open+first-query iteration is ~0.6 ms,
+  and 100 samples of that do not fit in 3 s.
+* **I/O-bound build groups**: sample_size 10, warm-up 1 s. `corpus` gets
+  measurement 10 s; `index_build` — the slowest, noisiest bench in the
+  suite, with hundreds-of-ms iterations dominated by disk I/O and
+  tantivy's multithreaded segment merges — gets 20 s so its ten samples
+  fit. Expect double-digit-percent scatter *between machines* and several
+  percent between runs. Fewer, longer samples keep the wall-clock cost
+  practical without hiding the stage costs.
 
 Honest expectations for laptop-class machines: run the suite twice before
 trusting a change verdict on the I/O groups; keep the machine on AC power

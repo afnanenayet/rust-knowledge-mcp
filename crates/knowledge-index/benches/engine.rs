@@ -141,15 +141,17 @@ fn corpus_benches(c: &mut Criterion, state: &BenchState) {
 ///
 /// Noise factors: the dominant noise source in the suite — disk I/O plus
 /// tantivy's multithreaded merge behavior (thread count is not engine-
-/// configurable today). sample_size 10 / measurement 10 s trades
-/// precision for practicality. The scratch tempdir is created in
+/// configurable today). sample_size 10 / measurement 20 s trades
+/// precision for practicality (the 20 s leaves room for ten
+/// multi-hundred-millisecond samples; 10 s under-sampled in the first
+/// smoke run). The scratch tempdir is created in
 /// `iter_batched` setup and dropped outside the timed region
 /// (`BatchSize::PerIteration`), so directory creation and rm -rf
 /// teardown never pollute the measurement.
 fn index_build_benches(c: &mut Criterion, state: &BenchState) {
     let mut group = c.benchmark_group("index_build");
     group.sample_size(10);
-    group.measurement_time(Duration::from_secs(10));
+    group.measurement_time(Duration::from_secs(20));
     group.warm_up_time(Duration::from_secs(1));
     group.throughput(Throughput::Elements(state.documents.len() as u64));
 
@@ -296,7 +298,7 @@ fn doc_get_benches(c: &mut Criterion, state: &BenchState) {
 fn startup_benches(c: &mut Criterion, state: &BenchState) {
     let mut group = c.benchmark_group("startup");
     group.sample_size(100);
-    group.measurement_time(Duration::from_secs(3));
+    group.measurement_time(Duration::from_secs(5));
     group.warm_up_time(Duration::from_secs(1));
 
     let index_path = state.index_path();
