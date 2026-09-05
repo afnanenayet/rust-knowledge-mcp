@@ -138,8 +138,10 @@ fn search_hits(result: &CallToolResult) -> Vec<Value> {
             _ => None,
         })
         .expect("text content");
-    serde_json::from_str::<Value>(text).expect("json payload")["results"]
-        .as_array()
+    let payload: Value = serde_json::from_str(text).expect("json payload");
+    payload
+        .get("results")
+        .and_then(Value::as_array)
         .expect("results array")
         .clone()
 }
