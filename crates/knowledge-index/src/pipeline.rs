@@ -122,6 +122,14 @@ pub struct ResolvedIndex {
     pub workspace_root: Option<PathBuf>,
 }
 
+impl ResolvedIndex {
+    /// Opens the resolved index directory — resolve-to-open in one step,
+    /// without re-running resolution.
+    pub fn open(&self) -> Result<TantivyRetriever, IndexError> {
+        TantivyRetriever::open(&self.index_dir).map_err(IndexError::from)
+    }
+}
+
 /// Resolves which index directory to serve, without opening it.
 ///
 /// Precedence mirrors [open_retriever]: an explicit `index_dir` wins and
@@ -154,8 +162,7 @@ pub fn open_retriever(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
 ) -> Result<TantivyRetriever, IndexError> {
-    let resolved = resolve_index(manifest_path, index_dir)?;
-    TantivyRetriever::open(&resolved.index_dir).map_err(IndexError::from)
+    resolve_index(manifest_path, index_dir)?.open()
 }
 
 fn now_rfc3339() -> String {

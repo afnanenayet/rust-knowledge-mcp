@@ -132,10 +132,11 @@ async fn run(manifest_path: Option<PathBuf>, index_dir: Option<PathBuf>) -> anyh
     let resolved = knowledge_index::resolve_index(manifest.as_deref(), index_dir.as_deref())
         .map_err(|e| anyhow::anyhow!("failed to resolve the workspace to serve: {e}"))?;
 
-    let retriever =
-        knowledge_index::open_retriever(manifest.as_deref(), Some(&resolved.index_dir)).map_err(
-            |e| index_open_error(e, &resolved, manifest.as_deref(), index_dir_explicit),
-        )?;
+    // Open the already-resolved index dir directly; re-calling
+    // open_retriever here would run resolution a second time.
+    let retriever = resolved
+        .open()
+        .map_err(|e| index_open_error(e, &resolved, manifest.as_deref(), index_dir_explicit))?;
 
     // cargo metadata did not run when the index dir was explicit; the root
     // recorded at build time is the best context available in that case.
