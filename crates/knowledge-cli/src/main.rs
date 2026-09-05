@@ -105,17 +105,22 @@ enum Command {
         query: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[facet(args::named, rename = "package", default)]
-        packages: Vec<String>,
+        // NOTE: the field is named in the singular on purpose: figue's
+        // scalar-to-list coercion looks fields up by their Rust name, so a
+        // `rename`d Vec field fails to deserialize single-occurrence flags
+        // (figue 4.0.5). The singular name kebab-cases to the frozen clap
+        // flag `--package` without a rename.
+        #[facet(args::named, default)]
+        package: Vec<String>,
 
         /// Restrict to source kinds (rustdoc_item, rustdoc_module,
         /// crate_readme, markdown_document). Repeatable.
-        #[facet(args::named, rename = "source-kind", default)]
-        source_kinds: Vec<String>,
+        #[facet(args::named, default)]
+        source_kind: Vec<String>,
 
         /// Restrict to item kinds (function, struct, trait, ...). Repeatable.
-        #[facet(args::named, rename = "item-kind", default)]
-        item_kinds: Vec<String>,
+        #[facet(args::named, default)]
+        item_kind: Vec<String>,
 
         /// Maximum number of results.
         #[facet(args::named, default = 8)]
@@ -145,8 +150,8 @@ enum Command {
         symbol: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[facet(args::named, rename = "package", default)]
-        packages: Vec<String>,
+        #[facet(args::named, default)]
+        package: Vec<String>,
 
         /// Emit JSON (one entry per line).
         #[facet(args::named, default)]
@@ -239,26 +244,26 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         } => index(cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
         Command::Search {
             query,
-            packages,
-            source_kinds,
-            item_kinds,
+            package,
+            source_kind,
+            item_kind,
             limit,
             json,
         } => search(
             cli,
             query,
-            packages,
-            source_kinds,
-            item_kinds,
+            package,
+            source_kind,
+            item_kind,
             *limit,
             *json,
         ),
         Command::Get { id, json } => get(cli, id, *json),
         Command::Symbol {
             symbol,
-            packages,
+            package,
             json,
-        } => symbol_lookup(cli, symbol, packages, *json),
+        } => symbol_lookup(cli, symbol, package, *json),
         Command::Eval { file } => eval(cli, file),
         Command::ConfigDocs { output } => config_docs::write_to(output),
     }
@@ -480,18 +485,18 @@ fn open_retriever(cli: &Cli) -> anyhow::Result<knowledge_index::TantivyRetriever
 fn search(
     cli: &Cli,
     query: &str,
-    packages: &[String],
-    source_kinds: &[String],
-    item_kinds: &[String],
+    package: &[String],
+    source_kind: &[String],
+    item_kind: &[String],
     limit: usize,
     json: bool,
 ) -> anyhow::Result<()> {
     let retriever = open_retriever(cli)?;
     let query = knowledge_core::SearchQuery {
         text: query.to_string(),
-        packages: packages.to_vec(),
-        source_kinds: parse_source_kinds(source_kinds)?,
-        item_kinds: item_kinds.to_vec(),
+        packages: package.to_vec(),
+        source_kinds: parse_source_kinds(source_kind)?,
+        item_kinds: item_kind.to_vec(),
         limit,
     };
     let hits = retriever
@@ -563,11 +568,11 @@ fn get(cli: &Cli, id: &str, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn symbol_lookup(cli: &Cli, symbol: &str, packages: &[String], json: bool) -> anyhow::Result<()> {
+fn symbol_lookup(cli: &Cli, symbol: &str, package: &[String], json: bool) -> anyhow::Result<()> {
     let retriever = open_retriever(cli)?;
     let query = knowledge_core::SymbolQuery {
         symbol: symbol.to_string(),
-        packages: packages.to_vec(),
+        packages: package.to_vec(),
         limit: 10,
     };
     let infos = retriever
@@ -649,4 +654,237 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use figue::{DriverError, MockEnv};
+    use knowledge_index::config::{
+        argv_requests_help, parse_args, resolve_index_dir_with,
+    };
+
+    use super::{ABOUT, Command, PROGRAM, Cli};
+
+    fn parse(argv: &[&str]) -> figue::DriverOutcome<Cli> {
+        parse_args(argv, PROGRAM, "0.1.0", ABOUT)
+    }
+
+    fn parse_ok(argv: &[&str]) -> Cli {
+        parse(argv)
+            .into_result()
+            .expect("argv should parse")
+            .get()
+    }
+
+    /// Table-driven parity check over representative argv samples: the same
+    /// cases clap handled, asserted against the frozen clap surface
+    /// (baseline captured in STATUS.md, 2026-09-05).
+    #[test]
+    fn both_value_forms_and_repeated_flags() {
+        let cli = parse_ok(&[
+            "search",
+            "tokio spawn",
+            "--package",
+            "demo_core",
+            "--package=base64",
+            "--source-kind=rustdoc_item",
+            "--source-kind",
+            "crate_readme",
+            "--item-kind=function",
+            "--limit=3",
+        ]);
+        let Command::Search {
+            query,
+            package,
+            source_kind,
+            item_kind,
+            limit,
+            json,
+        } = &cli.command
+        else {
+            panic!("expected search subcommand, got {:?}", cli.command);
+        };
+        assert_eq!(query, "tokio spawn");
+        assert_eq!(package, &["demo_core".to_string(), "base64".to_string()]);
+        assert_eq!(
+            source_kind,
+            &["rustdoc_item".to_string(), "crate_readme".to_string()]
+        );
+        assert_eq!(item_kind, &["function".to_string()]);
+        assert_eq!(*limit, 3);
+        assert!(!json);
+    }
+
+    #[test]
+    fn defaults_match_clap() {
+        let cli = parse_ok(&["search", "anything"]);
+        let Command::Search {
+            query,
+            package,
+            source_kind,
+            item_kind,
+            limit,
+            json,
+        } = &cli.command
+        else {
+            panic!("expected search subcommand");
+        };
+        assert_eq!(query, "anything");
+        assert!(package.is_empty());
+        assert!(source_kind.is_empty());
+        assert!(item_kind.is_empty());
+        assert_eq!(*limit, 8, "--limit must default to 8 like clap");
+        assert!(!json);
+
+        let cli = parse_ok(&["dump-docs"]);
+        let Command::DumpDocs { rustdoc_scope, .. } = &cli.command else {
+            panic!("expected dump-docs subcommand");
+        };
+        assert_eq!(
+            rustdoc_scope, "workspace",
+            "--rustdoc-scope must default to workspace like clap"
+        );
+    }
+
+    #[test]
+    fn global_flags_before_and_after_subcommand() {
+        let before = parse_ok(&["--manifest-path", "/before/Cargo.toml", "packages"]);
+        let after = parse_ok(&["packages", "--manifest-path", "/after/Cargo.toml"]);
+        assert_eq!(
+            before.manifest_path.as_deref(),
+            Some(Path::new("/before/Cargo.toml"))
+        );
+        assert_eq!(
+            after.manifest_path.as_deref(),
+            Some(Path::new("/after/Cargo.toml")),
+            "global flags must be accepted after the subcommand (adoption agency)"
+        );
+
+        let short = parse_ok(&["packages", "-v"]);
+        assert!(short.verbose, "-v must work after the subcommand");
+        let long = parse_ok(&["-v", "packages"]);
+        assert!(long.verbose, "-v must work before the subcommand");
+    }
+
+    #[test]
+    fn missing_required_arguments_do_not_parse() {
+        // No subcommand at all.
+        match parse(&[]).into_result() {
+            Err(DriverError::Help { text, .. }) => {
+                assert!(!argv_requests_help(&[]));
+                assert!(text.contains(PROGRAM));
+            }
+            Err(other) => panic!("expected Help for missing subcommand, got {other:?}"),
+            Ok(_) => panic!("empty argv must not parse"),
+        }
+        // Missing the required QUERY positional.
+        match parse(&["search"]).into_result() {
+            Err(DriverError::Help { text, suggestion }) => {
+                assert!(text.contains("search"), "help should be for search: {text}");
+                assert!(suggestion.is_some(), "missing QUERY carries a suggestion");
+            }
+            Err(other) => panic!("expected Help for missing QUERY, got {other:?}"),
+            Ok(_) => panic!("search without a query must not parse"),
+        }
+        // Missing the required FILE positional.
+        assert!(parse(&["eval"]).into_result().is_err());
+    }
+
+    #[test]
+    fn unknown_flags_and_subcommands_are_errors() {
+        for argv in [
+            &["--bogus"][..],
+            &["--bogus", "packages"][..],
+            &["packages", "--bogus"][..],
+            &["frobnicate"][..],
+            &["search", "query", "extra"][..],
+        ] {
+            match parse(argv).into_result() {
+                Err(DriverError::Failed { .. }) => {}
+                Err(other) => panic!("expected Failed for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse"),
+            }
+        }
+    }
+
+    #[test]
+    fn help_and_version_short_circuit() {
+        for argv in [&["--help"][..], &["-h"][..]] {
+            match parse(argv).into_result() {
+                Err(DriverError::Help { text, .. }) => {
+                    assert!(text.contains("--manifest-path"), "help text: {text}");
+                    assert!(text.contains("search"), "help lists subcommands: {text}");
+                }
+                Err(other) => panic!("expected Help for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
+            }
+        }
+        for argv in [&["--version"][..], &["-V"][..]] {
+            match parse(argv).into_result() {
+                Err(DriverError::Version { text }) => {
+                    assert_eq!(text.trim_end(), "rust-knowledge 0.1.0");
+                }
+                Err(other) => panic!("expected Version for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
+            }
+        }
+    }
+
+    #[test]
+    fn per_subcommand_help_is_readable() {
+        for subcommand in [
+            "packages",
+            "dump-docs",
+            "index",
+            "search",
+            "get",
+            "symbol",
+            "eval",
+            "config-docs",
+        ] {
+            let argv = [subcommand, "--help"];
+            match parse(&argv).into_result() {
+                Err(DriverError::Help { text, .. }) => {
+                    assert!(
+                        text.contains(subcommand),
+                        "help for {subcommand} should name it: {text}"
+                    );
+                    assert!(argv_requests_help(&argv), "explicit help scan");
+                }
+                Err(other) => panic!("expected Help for {subcommand}, got {other:?}"),
+                Ok(_) => panic!("{subcommand} --help must not parse to a value"),
+            }
+        }
+    }
+
+    #[test]
+    fn index_dir_layering_matches_the_documented_hierarchy() {
+        // No flag, no env: absent (engine falls back to <workspace>/.rust-knowledge).
+        let cli = parse_ok(&["search", "foo"]);
+        let resolved = resolve_index_dir_with(cli.index_dir, MockEnv::new());
+        assert_eq!(resolved, None);
+
+        // No flag, env set: the env var fills the gap (additive behavior).
+        let cli = parse_ok(&["search", "foo"]);
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
+        let resolved = resolve_index_dir_with(cli.index_dir, env);
+        assert_eq!(resolved.as_deref(), Some(Path::new("/from-env")));
+
+        // Flag set: it beats the same env var.
+        let cli = parse_ok(&["search", "foo", "--index-dir", "/from-flag"]);
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
+        let resolved = resolve_index_dir_with(cli.index_dir, env);
+        assert_eq!(resolved.as_deref(), Some(Path::new("/from-flag")));
+    }
+
+    #[test]
+    fn config_docs_default_output_matches_the_documented_path() {
+        let cli = parse_ok(&["config-docs"]);
+        let Command::ConfigDocs { output } = &cli.command else {
+            panic!("expected config-docs subcommand");
+        };
+        assert_eq!(output, Path::new("docs/config-reference.html"));
+    }
 }
