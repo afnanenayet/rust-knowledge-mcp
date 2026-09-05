@@ -108,8 +108,11 @@ KnowledgeRetriever trait (sync)                                                 
   dependency distinction and two versions of `base64` in one graph. Its rustdoc
   artifacts are committed under `fixtures/demo-workspace/prebuilt-rustdoc/` so
   tests never invoke nightly rustdoc.
-- The MCP server is wired into Claude Code via `.mcp.json` and
-  `.claude/settings.local.json` (points at `target/release/knowledge-mcp`).
+- The MCP server supports one-time global registration with zero arguments:
+  the workspace to serve is inferred from the server's working directory
+  (walk up to the nearest `Cargo.toml`). Per-repo wiring via `.mcp.json` and
+  `.claude/settings.local.json` (points at `target/release/knowledge-mcp`)
+  keeps working.
 - `tests/universe.rs` parses a committed `cargo metadata` blob whose absolute
   paths come from the machine that recorded it, so tests there must never touch
   the filesystem; they assert derivations (e.g. an identity carries over the

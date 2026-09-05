@@ -55,7 +55,48 @@ The same engine is exposed as an MCP server with three tools:
   package/version provenance, signature and source span.
 - `symbol_lookup` — near-exact symbol lookup with structured API info.
 
-Claude Code configuration (or Codex equivalent):
+### One-time global registration (recommended)
+
+Register the server once per machine with **no per-repo arguments**:
+
+    claude mcp add --scope user rust-knowledge <path-to>/knowledge-mcp
+
+or add the equivalent user-scope entry to `~/.claude.json`:
+
+    {
+      "mcpServers": {
+        "rust-knowledge": {
+          "command": "<path-to>/knowledge-mcp"
+        }
+      }
+    }
+
+Codex-style clients take the same form: put the no-argument command in your
+user-level MCP config (for Codex CLI, `~/.codex/config.toml`).
+
+With zero arguments the server infers the workspace from its working
+directory: it walks up from cwd to the nearest `Cargo.toml` and serves that
+workspace's index at `<workspace>/.rust-knowledge`, wherever in the checkout
+cwd is (a member manifest resolves to its owning workspace via cargo
+metadata). The **cwd contract**: the client must launch the server with its
+working directory inside the project — Claude Code does this for stdio MCP
+servers. The inferred workspace root and index directory are logged to
+stderr at startup.
+
+Per-repo `.mcp.json` entries are no longer needed with this registration;
+existing ones keep working unchanged.
+
+When inference cannot work the server exits immediately with the fix:
+
+- no `Cargo.toml` at or above the working directory: pass
+  `--manifest-path /path/to/workspace/Cargo.toml`, or launch it from
+  inside a workspace;
+- workspace found but index missing: run the exact command it prints, e.g.
+  `rust-knowledge index --manifest-path /path/to/workspace/Cargo.toml`.
+
+### Explicit per-repo configuration (still supported)
+
+For clients that cannot set the working directory:
 
     {
       "mcpServers": {
@@ -66,9 +107,13 @@ Claude Code configuration (or Codex equivalent):
       }
     }
 
-`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir`; `RUST_KNOWLEDGE_CARGO`
-overrides the cargo binary used for generation. Logs go to stderr; stdout
-is the MCP channel.
+`--manifest-path` overrides cwd inference. `--index-dir` (or
+`RUST_KNOWLEDGE_INDEX_DIR`) serves an existing index directly, without
+resolving any workspace, so the working directory does not matter there.
+`RUST_KNOWLEDGE_CARGO` overrides the cargo binary used for generation.
+Logs go to stderr; stdout is the MCP channel. Multiple sessions may serve
+the same index concurrently (the server opens it readers-only, no writer
+lock).
 
 ## Workflow for coding agents (see AGENTS.md)
 
