@@ -45,8 +45,15 @@ unstable): `rustup toolchain install nightly`. Indexing with
     rust-knowledge symbol Writer::write_all       # exact/near-exact lookup
     rust-knowledge dump-docs --package demo-core  # raw corpus (debug)
     rust-knowledge eval evals/queries.toml        # retrieval eval report
+    rust-knowledge config-docs                    # regenerate the reference below
 
-Every command takes `--manifest-path` and `--index-dir`.
+Every command takes `--manifest-path` and `--index-dir` (also accepted after
+the subcommand name). Both binaries define their whole argument surface with
+[facet](https://facet.rs)-derived shapes parsed by
+[figue](https://facet.rs/figue/), and `docs/config-reference.html` documents
+every command, flag, environment variable and default — generated from those
+same shapes, so it cannot drift from the parsing code. After changing any
+shape, regenerate it with `rust-knowledge config-docs` and commit the result.
 
 ## MCP
 
@@ -69,9 +76,12 @@ Claude Code configuration (or Codex equivalent):
       }
     }
 
-`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir`; `RUST_KNOWLEDGE_CARGO`
-overrides the cargo binary used for generation. Logs go to stderr; stdout
-is the MCP channel.
+`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir` in both binaries
+(the flag always wins); `RUST_KNOWLEDGE_CARGO` overrides the cargo binary
+used for generation. `RUST_KNOWLEDGE_LOG` (or `RUST_LOG` as fallback) sets
+the tracing filter for both binaries, and `rust-knowledge --verbose` forces
+debug logging over any environment setting. Logs go to stderr; stdout is the
+MCP channel. See `docs/config-reference.html` for the full reference.
 
 ## Workflow for coding agents (see AGENTS.md)
 

@@ -59,7 +59,7 @@ normalized KnowledgeDocument corpus (deterministic DocumentId)                  
 local Tantivy index (weighted fields, filters)                                  knowledge-index::tantivy_index
         v
 KnowledgeRetriever trait (sync)                                                 knowledge-core::query
-   ├── knowledge-cli  (bin `rust-knowledge`; clap)
+   ├── knowledge-cli  (bin `rust-knowledge`; figue over facet shapes)
    └── knowledge-mcp (bin `knowledge-mcp`; rmcp; thin adapter, no engine deps)
 ```
 
