@@ -78,7 +78,7 @@ fn open_retriever(config: &WorkspaceConfig) -> anyhow::Result<knowledge_index::T
         config.cargo.as_deref(),
     )
     .map_err(|e| anyhow::anyhow!(
-        "failed to open the knowledge index: {e}. Build it first with          'rust-knowledge index' (or pass --index-dir)."
+        "failed to open the knowledge index: {e}. Build it first with 'rust-knowledge index' (or pass --index-dir)."
     ))
 }
 
