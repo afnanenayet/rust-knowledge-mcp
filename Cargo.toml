@@ -32,7 +32,7 @@ rmcp = { version = "3.2.0", features = ["macros", "server", "transport-io"] }
 rustdoc-types = "0.61.0"
 sha2 = "0.10"
 tantivy = "0.26.1"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "time"] }
 
 [workspace.lints.clippy]
 get_unwrap = "warn"
