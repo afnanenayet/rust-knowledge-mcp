@@ -59,19 +59,21 @@ fn locates_packages_deterministically() {
         manifest.display()
     );
     assert!(
-        manifest.starts_with(home_cargo_registry()),
+        manifest.starts_with(cargo_registry()),
         "expected the registry checkout cargo metadata reports"
     );
 }
 
-fn home_cargo_registry() -> PathBuf {
-    // Registry checkouts live under the active CARGO_HOME ($HOME/.cargo by
-    // default); cargo metadata reports them from there.
-    match std::env::var_os("CARGO_HOME") {
-        Some(home) => PathBuf::from(home),
-        None => PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".cargo"),
-    }
-    .join("registry")
+fn cargo_registry() -> PathBuf {
+    // Registry checkouts live under the active cargo home (CARGO_HOME,
+    // else cargo's default); cargo metadata reports them from there.
+    // The `home` crate implements cargo's exact default-home logic —
+    // including the HOME-less case, where its user-database fallback
+    // replaces a raw $HOME read — so this resolves the same directory
+    // cargo itself used.
+    home::cargo_home()
+        .expect("cargo home should resolve")
+        .join("registry")
 }
 
 /// Every identity cargo metadata just reported must be locatable on this
