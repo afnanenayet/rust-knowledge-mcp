@@ -12,6 +12,7 @@
 //!   implementation.
 //! * [store] - persistent index layout and metadata.
 //! * [pipeline] - the end-to-end index command used by CLI and tests.
+//! * [workspace] - cwd to nearest-manifest workspace resolution.
 //! * [eval] - retrieval evaluation over a committed query set.
 
 pub mod cargo;
@@ -23,9 +24,13 @@ pub mod pipeline;
 pub mod rustdoc;
 pub mod store;
 pub mod tantivy_index;
+pub mod workspace;
 
 pub use cargo::CargoUniverse;
 pub use corpus::{CorpusOptions, CorpusReport, RustdocScope, build_corpus};
 pub use error::IndexError;
-pub use pipeline::{IndexOptions, IndexOutcome, index_workspace, open_retriever};
+pub use pipeline::{
+    IndexOptions, IndexOutcome, ResolvedIndex, index_workspace, open_retriever, resolve_index,
+};
 pub use tantivy_index::TantivyRetriever;
+pub use workspace::nearest_manifest;
