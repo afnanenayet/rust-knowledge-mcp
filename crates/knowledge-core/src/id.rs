@@ -30,7 +30,7 @@ impl DocumentId {
         // 16 bytes (32 hex chars): collision-free for this corpus size, compact
         // enough for an LLM to echo back verbatim.
         let mut hex = String::with_capacity(32);
-        for byte in &digest[..16] {
+        for byte in digest.iter().take(16) {
             hex.push_str(&format!("{byte:02x}"));
         }
         DocumentId(hex)

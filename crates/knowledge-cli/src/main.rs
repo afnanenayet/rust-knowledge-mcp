@@ -334,7 +334,8 @@ fn dump_docs(
             println!("related: {}", doc.related_symbols.join(", "));
         }
         let text = if doc.text.len() > 1200 {
-            format!("{}...", doc.text[..1200].trim_end())
+            let end = doc.text.floor_char_boundary(1200);
+            format!("{}...", doc.text.get(..end).unwrap_or_default().trim_end())
         } else {
             doc.text.clone()
         };

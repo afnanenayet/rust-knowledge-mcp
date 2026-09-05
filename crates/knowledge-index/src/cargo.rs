@@ -131,7 +131,7 @@ impl CargoUniverse {
 
     /// Looks a package up by Cargo's opaque id.
     pub fn get(&self, id: &PackageId) -> Option<&Package> {
-        self.by_id.get(id).map(|&i| &self.metadata.packages[i])
+        self.by_id.get(id).and_then(|&i| self.metadata.packages.get(i))
     }
 
     /// Deterministically locates a package by name@version or bare name.
@@ -157,7 +157,7 @@ impl CargoUniverse {
             0 => Err(IndexError::PackageNotFound {
                 spec: spec.to_string(),
             }),
-            1 => Ok(matches[0]),
+            1 => Ok(matches.into_iter().next().expect("exactly one match")),
             _ => {
                 let versions = matches
                     .iter()
@@ -249,7 +249,7 @@ impl CargoUniverse {
             hasher.update([0x1f]);
         }
         let digest = hasher.finalize();
-        hex(&digest[..16])
+        hex(digest.get(..16).expect("sha256 digest is 32 bytes"))
     }
 
     /// Path of the workspace Cargo.lock, if present.
@@ -277,7 +277,7 @@ fn hash_file(path: &Path) -> String {
         Ok(bytes) => {
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
-            hex(&hasher.finalize()[..16])
+            hex(hasher.finalize().get(..16).expect("sha256 digest is 32 bytes"))
         }
         Err(_) => String::new(),
     }

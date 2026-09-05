@@ -65,7 +65,7 @@ fn locates_packages_deterministically() {
 }
 
 fn home_cargo_registry() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap()).join(".cargo/registry")
+    PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".cargo/registry")
 }
 
 #[test]

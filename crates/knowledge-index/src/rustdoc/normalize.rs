@@ -119,7 +119,7 @@ fn extract_format_version(raw: &str) -> u32 {
     let Some(pos) = raw.rfind(needle) else {
         return 0;
     };
-    let after = &raw[pos + needle.len()..];
+    let after = raw.get(pos + needle.len()..).unwrap_or_default();
     let digits: String = after
         .chars()
         .skip_while(|c| c.is_whitespace())
@@ -397,7 +397,6 @@ impl<'a> Walker<'a> {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn push_doc(
         &mut self,
         item: &Item,

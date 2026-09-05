@@ -40,7 +40,7 @@ fn find(
     docs.iter()
         .find(|d| pred(d))
         .cloned()
-        .unwrap_or_else(|| panic!("no document matched"))
+        .expect("no document matched")
 }
 
 #[test]

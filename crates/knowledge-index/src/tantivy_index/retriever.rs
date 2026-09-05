@@ -595,9 +595,11 @@ pub(crate) fn truncate_at_word(text: &str, max: usize) -> String {
     while end > 0 && !trimmed.is_char_boundary(end) {
         end -= 1;
     }
-    let head = &trimmed[..end];
+    let head = trimmed.get(..end).unwrap_or_default();
     match head.rfind(char::is_whitespace) {
-        Some(space) if space > max / 2 => format!("{}...", head[..space].trim_end()),
+        Some(space) if space > max / 2 => {
+            format!("{}...", head.get(..space).unwrap_or_default().trim_end())
+        }
         _ => format!("{head}..."),
     }
 }

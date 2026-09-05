@@ -87,8 +87,8 @@ impl GeneratedRustdocProvider {
 
     fn command(&self, args: &[String]) -> Command {
         let prefix = self.cargo_argv();
-        let mut cmd = Command::new(&prefix[0]);
-        for arg in &prefix[1..] {
+        let mut cmd = Command::new(prefix.first().expect("cargo argv is never empty"));
+        for arg in prefix.iter().skip(1) {
             cmd.arg(arg);
         }
         for arg in args {
@@ -254,8 +254,8 @@ fn stderr_tail(stderr: &[u8], max: usize) -> String {
     if text.len() <= max {
         text.trim().to_string()
     } else {
-        let start = text.len() - max;
-        let tail = text[start..].trim();
+        let start = text.floor_char_boundary(text.len() - max);
+        let tail = text.get(start..).unwrap_or_default().trim();
         format!("...{tail}")
     }
 }
@@ -263,7 +263,6 @@ fn stderr_tail(stderr: &[u8], max: usize) -> String {
 // manifest_path is retained for diagnostics in future work; keep the field
 // exercised to avoid dead-code warnings.
 impl GeneratedRustdocProvider {
-    #[allow(dead_code)]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
     }

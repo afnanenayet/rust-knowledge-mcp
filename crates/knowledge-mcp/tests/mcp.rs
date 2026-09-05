@@ -54,6 +54,7 @@ fn fixture_retriever() -> TantivyRetriever {
     };
     build_index(dir.path(), &documents, &meta).expect("build index");
     let retriever = TantivyRetriever::open(dir.path()).expect("open index");
+    #[expect(clippy::mem_forget, reason = "leak the TempDir for the test's lifetime")]
     std::mem::forget(dir);
     retriever
 }
@@ -68,6 +69,7 @@ async fn serve(retriever: TantivyRetriever) -> RunningService<RoleClient, NoopCl
         .await
         .expect("client serves");
     // Keep the server task alive for the lifetime of the test.
+    #[expect(clippy::mem_forget, reason = "keep the server task alive for the test")]
     std::mem::forget(server_task);
     client
 }
@@ -86,10 +88,15 @@ fn json_of(result: &CallToolResult) -> Value {
         "tool call failed: {:?}",
         result.content
     );
-    match &result.content[0] {
-        ContentBlock::Text(text) => serde_json::from_str(&text.text).expect("json payload"),
-        other => panic!("expected text content, got {other:?}"),
-    }
+    let text = result
+        .content
+        .first()
+        .and_then(|c| match c {
+            ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .expect("expected text content");
+    serde_json::from_str(text).expect("json payload")
 }
 
 #[tokio::test]
@@ -253,7 +260,7 @@ async fn symbol_lookup_returns_api_info() {
 }
 
 // Keep the SourceKind import used: mirrors the server-side filter contract.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "keeps the SourceKind import exercised")]
 fn source_kind_round_trip() -> SourceKind {
     "rustdoc_item".parse().expect("kind")
 }

@@ -51,6 +51,7 @@ fn build_temp_index(tag: &str) -> (tempfile::TempDir, TantivyRetriever) {
     build_index(dir.path(), &documents, &meta).expect("build index");
     let retriever = TantivyRetriever::open(dir.path()).expect("open index");
     // Leak the TempDir: tests read it for their whole life.
+    #[expect(clippy::mem_forget, reason = "leak the TempDir for the test's lifetime")]
     std::mem::forget(dir);
     let _ = tag;
     (tempfile::TempDir::new().expect("unused"), retriever)
