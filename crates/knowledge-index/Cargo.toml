@@ -23,6 +23,11 @@ tracing = { workspace = true }
 [dev-dependencies]
 home = "0.5.12"
 tempfile = "3"
+criterion = "0.8.2"
+
+[[bench]]
+name = "engine"
+harness = false
 
 [lints]
 workspace = true
