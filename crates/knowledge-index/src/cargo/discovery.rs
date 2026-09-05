@@ -50,6 +50,7 @@
 //! all when tiers 1 or 2 win.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -58,7 +59,7 @@ use tracing::{debug, info};
 
 /// Which tier of the precedence order produced a resolved cargo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CargoSource {
+pub(crate) enum CargoSource {
     /// The `RUST_KNOWLEDGE_CARGO` environment variable.
     Explicit,
     /// The `$CARGO` environment variable.
@@ -91,12 +92,12 @@ pub struct ResolvedCargo {
     /// stable rustdoc and fails on `-Zunstable-options`).
     pub path_prepend: Option<PathBuf>,
     /// Which precedence tier produced this invocation.
-    pub source: CargoSource,
+    pub(crate) source: CargoSource,
 }
 
 /// Everything [`resolve_with`] depends on, injected so unit tests never
 /// spawn a real cargo or rustup.
-pub struct ResolveInputs<'a> {
+pub(crate) struct ResolveInputs<'a> {
     /// Requested toolchain (e.g. "nightly"); None = the active toolchain.
     pub toolchain: Option<&'a str>,
     /// Raw `RUST_KNOWLEDGE_CARGO` value; empty/whitespace counts as unset.
@@ -114,7 +115,7 @@ pub struct ResolveInputs<'a> {
 /// Pure resolution decision over injected inputs. See the
 /// [module docs](self) for the precedence order and the `+toolchain`
 /// semantics; this function performs no I/O.
-pub fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
+pub(crate) fn resolve_with(inputs: &ResolveInputs<'_>) -> ResolvedCargo {
     // Tier 1: explicit override wins and suppresses `+toolchain`: the
     // caller controls the toolchain, including the rustdoc on PATH.
     if let Some(explicit) = non_empty_trimmed(inputs.explicit_cargo) {
@@ -197,6 +198,23 @@ fn toolchain_pre_args(toolchain: Option<&str>) -> Vec<String> {
     }
 }
 
+/// The `PATH` value for a cargo spawn that must find `dir`'s rustc and
+/// rustdoc first: `dir` prepended to `existing` (the ambient `PATH`),
+/// or `dir` alone when `PATH` is unset.
+///
+/// The existing value is split into segments before the re-join —
+/// [`std::env::join_paths`] validates every segment, so a whole path
+/// list must never be handed to it as a single segment. A segment that
+/// contains the platform list separator fails the join; the None tells
+/// the caller to spawn with the ambient `PATH` rather than fail.
+fn prepended_path(dir: &Path, existing: Option<OsString>) -> Option<OsString> {
+    let mut segments: Vec<PathBuf> = vec![dir.to_path_buf()];
+    if let Some(existing) = existing {
+        segments.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(&segments).ok()
+}
+
 /// A shared, process-cached cargo resolution with its `--version` output
 /// cached after the first query.
 pub struct CachedCargo {
@@ -239,26 +257,23 @@ impl CachedCargo {
             cmd.arg(arg);
         }
         if let Some(dir) = &resolved.path_prepend {
-            // Split the ambient PATH into segments, prepend the toolchain
-            // bin dir, and re-join: join_paths validates segments, so the
-            // whole path-list must never be passed as one segment.
-            let mut segments: Vec<PathBuf> = vec![dir.clone()];
-            if let Some(existing) = std::env::var_os("PATH") {
-                segments.extend(std::env::split_paths(&existing));
-            }
-            // join_paths only fails when a segment contains the platform
-            // list separator (a malformed PATH entry); skip the prepend
-            // rather than fail the spawn.
-            match std::env::join_paths(&segments) {
-                Ok(path) => {
+            // prepended_path splits the ambient PATH into segments,
+            // prepends the toolchain bin dir, and re-joins; None means a
+            // malformed segment — skip the prepend rather than fail the
+            // spawn.
+            match prepended_path(dir, std::env::var_os("PATH")) {
+                Some(path) => {
                     debug!(
                         dir = %dir.display(),
                         "prepending the toolchain bin dir to the cargo child's PATH"
                     );
                     cmd.env("PATH", path);
                 }
-                Err(cause) => {
-                    debug!(error = %cause, "could not join PATH; spawning with ambient PATH");
+                None => {
+                    debug!(
+                        "could not build a prepended PATH (a segment contains \
+                         the platform list separator); spawning with the ambient PATH"
+                    );
                 }
             }
         }
@@ -647,5 +662,98 @@ mod tests {
         // proxy) and has nothing to add otherwise.
         assert_eq!(with.pre_args, vec!["+nightly".to_string()]);
         assert!(without.pre_args.is_empty());
+    }
+
+    /// The platform's PATH list separator (`:` on Unix, `;` on Windows),
+    /// discovered by probing `join_paths` because std exposes no constant
+    /// for it.
+    fn path_list_separator() -> &'static str {
+        [":", ";"]
+            .into_iter()
+            .find(|sep| std::env::join_paths([format!("segment{sep}with separator")]).is_err())
+            .expect("join_paths rejects one of the two candidate separators")
+    }
+
+    #[test]
+    fn prepended_path_puts_the_dir_before_the_existing_path() {
+        let existing = std::env::join_paths(["/usr/bin", "/bin"]).expect("segments join");
+        let joined = prepended_path(Path::new("/rustup/nightly/bin"), Some(existing))
+            .expect("segments without separators join");
+        let segments: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(
+            segments,
+            vec![
+                PathBuf::from("/rustup/nightly/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ],
+            "the toolchain bin dir must be first so its rustc/rustdoc beat \
+             every ambient PATH entry"
+        );
+    }
+
+    #[test]
+    fn prepended_path_preserves_every_existing_segment_individually() {
+        let existing =
+            std::env::join_paths(["/usr/local/bin", "/usr/bin", "/bin"]).expect("segments join");
+        let joined = prepended_path(Path::new("/rustup/nightly/bin"), Some(existing))
+            .expect("segments without separators join");
+        let segments: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(
+            segments,
+            vec![
+                PathBuf::from("/rustup/nightly/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ],
+            "each ambient PATH entry must survive as its own segment; handing \
+             the whole PATH to join_paths as one segment was the original bug"
+        );
+    }
+
+    #[test]
+    fn prepended_path_uses_the_dir_alone_when_path_is_unset() {
+        let joined = prepended_path(Path::new("/rustup/nightly/bin"), None)
+            .expect("a single well-formed segment joins");
+        let segments: Vec<PathBuf> = std::env::split_paths(&joined).collect();
+        assert_eq!(segments, vec![PathBuf::from("/rustup/nightly/bin")]);
+    }
+
+    #[test]
+    fn prepended_path_degrades_to_none_on_a_malformed_segment() {
+        let sep = path_list_separator();
+        let malformed_dir = format!("/bad{sep}dir/bin");
+        // A directory that itself embeds the list separator cannot be
+        // joined into a PATH; the caller must learn that (None) so the
+        // spawn degrades to the ambient PATH instead of failing.
+        assert_eq!(
+            prepended_path(Path::new(&malformed_dir), Some(OsString::from("/usr/bin"))),
+            None
+        );
+    }
+
+    #[test]
+    fn command_without_a_path_prepend_leaves_the_child_env_untouched() {
+        let resolved = resolve_case(
+            None,
+            Some("/opt/custom/cargo"),
+            None,
+            &RustupProbe::new(None),
+            None,
+        );
+        let cached = CachedCargo {
+            resolved,
+            version: OnceLock::new(),
+        };
+        let touches_path = cached
+            .command()
+            .get_envs()
+            .any(|(key, _)| key == std::ffi::OsStr::new("PATH"));
+        assert!(
+            !touches_path,
+            "only the rustup tier carries a PATH prepend; every other spawn \
+             keeps the ambient environment"
+        );
     }
 }
