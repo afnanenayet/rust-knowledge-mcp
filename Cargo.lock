@@ -785,6 +785,7 @@ version = "0.1.0"
 dependencies = [
  "cargo_metadata",
  "knowledge-core",
+ "log",
  "pulldown-cmark",
  "rustdoc-types",
  "serde",
@@ -795,6 +796,7 @@ dependencies = [
  "thiserror",
  "toml",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
 ]
 
