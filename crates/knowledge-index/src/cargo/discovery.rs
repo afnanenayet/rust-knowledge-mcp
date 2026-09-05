@@ -205,14 +205,18 @@ fn toolchain_pre_args(toolchain: Option<&str>) -> Vec<String> {
 /// The existing value is split into segments before the re-join —
 /// [`std::env::join_paths`] validates every segment, so a whole path
 /// list must never be handed to it as a single segment. A segment that
-/// contains the platform list separator fails the join; the None tells
-/// the caller to spawn with the ambient `PATH` rather than fail.
-fn prepended_path(dir: &Path, existing: Option<OsString>) -> Option<OsString> {
+/// cannot be re-joined fails with the [`std::env::JoinPathsError`]
+/// cause so the caller can log it and spawn with the ambient `PATH`
+/// rather than fail.
+fn prepended_path(
+    dir: &Path,
+    existing: Option<OsString>,
+) -> Result<OsString, std::env::JoinPathsError> {
     let mut segments: Vec<PathBuf> = vec![dir.to_path_buf()];
     if let Some(existing) = existing {
         segments.extend(std::env::split_paths(&existing));
     }
-    std::env::join_paths(&segments).ok()
+    std::env::join_paths(&segments)
 }
 
 /// A shared, process-cached cargo resolution with its `--version` output
@@ -258,21 +262,22 @@ impl CachedCargo {
         }
         if let Some(dir) = &resolved.path_prepend {
             // prepended_path splits the ambient PATH into segments,
-            // prepends the toolchain bin dir, and re-joins; None means a
-            // malformed segment — skip the prepend rather than fail the
-            // spawn.
+            // prepends the toolchain bin dir, and re-joins; a join
+            // failure (a segment embedding the platform list
+            // separator) carries its cause — skip the prepend rather
+            // than fail the spawn.
             match prepended_path(dir, std::env::var_os("PATH")) {
-                Some(path) => {
+                Ok(path) => {
                     debug!(
                         dir = %dir.display(),
                         "prepending the toolchain bin dir to the cargo child's PATH"
                     );
                     cmd.env("PATH", path);
                 }
-                None => {
+                Err(cause) => {
                     debug!(
-                        "could not build a prepended PATH (a segment contains \
-                         the platform list separator); spawning with the ambient PATH"
+                        error = %cause,
+                        "could not build a prepended PATH; spawning with the ambient PATH"
                     );
                 }
             }
@@ -721,15 +726,35 @@ mod tests {
     }
 
     #[test]
-    fn prepended_path_degrades_to_none_on_a_malformed_segment() {
+    fn prepended_path_errors_on_a_malformed_segment() {
         let sep = path_list_separator();
         let malformed_dir = format!("/bad{sep}dir/bin");
         // A directory that itself embeds the list separator cannot be
-        // joined into a PATH; the caller must learn that (None) so the
-        // spawn degrades to the ambient PATH instead of failing.
+        // joined into a PATH; the caller must learn that (Err, with
+        // the join error cause) so the spawn degrades to the ambient
+        // PATH instead of failing.
+        prepended_path(Path::new(&malformed_dir), Some(OsString::from("/usr/bin")))
+            .unwrap_err();
+    }
+
+    #[test]
+    fn prepended_path_survives_a_corrupt_ambient_path_entry() {
+        // The realistic ambient-PATH corruption: one entry embedding
+        // the platform list separator (e.g. /bad:dir on Unix — say a
+        // Windows-style value leaking in). split_paths cannot yield a
+        // segment containing the separator, so the corruption is
+        // normalized into separate (harmless) segments and the prepend
+        // still applies; a join failure can only come from the
+        // prepended dir itself (previous test), never from the
+        // existing value (probed: even a NUL byte re-joins cleanly).
+        let sep = path_list_separator();
+        let corrupt = OsString::from(format!("/usr/bin{sep}/bad{sep}dir"));
+        let joined = prepended_path(Path::new("/rustup/nightly/bin"), Some(corrupt))
+            .expect("corrupt ambient entries are split, never fail the join");
         assert_eq!(
-            prepended_path(Path::new(&malformed_dir), Some(OsString::from("/usr/bin"))),
-            None
+            std::env::split_paths(&joined).next(),
+            Some(PathBuf::from("/rustup/nightly/bin")),
+            "the toolchain bin dir stays first whatever the ambient PATH holds"
         );
     }
 
@@ -754,6 +779,39 @@ mod tests {
             !touches_path,
             "only the rustup tier carries a PATH prepend; every other spawn \
              keeps the ambient environment"
+        );
+    }
+
+    #[test]
+    fn command_from_the_rustup_tier_prepends_the_bin_dir_to_the_child_path() {
+        // The live tier-3 bug lived at exactly this application site:
+        // cmd.env("PATH", path). Before this test, deleting that one
+        // line passed the whole suite green while stable rustdoc
+        // rejected -Zunstable-options on default rustup machines. The
+        // built Command must carry a PATH whose FIRST segment is the
+        // toolchain bin dir; only the first segment is asserted so the
+        // machine-dependent ambient tail never matters.
+        let resolved = resolve_case(
+            Some("nightly"),
+            None,
+            None,
+            &RustupProbe::new(Some(PathBuf::from("/rustup/nightly/bin/cargo"))),
+            None,
+        );
+        let cached = CachedCargo {
+            resolved,
+            version: OnceLock::new(),
+        };
+        let cmd = cached.command();
+        let child_path = cmd
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .expect("the rustup tier must set a prepended PATH on the cargo child");
+        assert_eq!(
+            std::env::split_paths(child_path).next(),
+            Some(PathBuf::from("/rustup/nightly/bin")),
+            "the toolchain bin dir must be the first PATH segment the child sees"
         );
     }
 }
