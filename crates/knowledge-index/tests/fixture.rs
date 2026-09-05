@@ -65,7 +65,13 @@ fn locates_packages_deterministically() {
 }
 
 fn home_cargo_registry() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".cargo/registry")
+    // Registry checkouts live under the active CARGO_HOME ($HOME/.cargo by
+    // default); cargo metadata reports them from there.
+    match std::env::var_os("CARGO_HOME") {
+        Some(home) => PathBuf::from(home),
+        None => PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".cargo"),
+    }
+    .join("registry")
 }
 
 /// Every identity cargo metadata just reported must be locatable on this
