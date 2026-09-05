@@ -501,10 +501,11 @@ const CURATED_ENV_VARS: &[(&str, &str, &str, &str)] = &[
 fn env_aliases(field: &Field) -> Vec<String> {
     let mut aliases = Vec::new();
     for attr in field.attributes {
-        if attr.ns == Some("args") && attr.key == "env_alias" {
-            if let Some(alias) = attr.get_as::<&str>() {
-                aliases.push(alias.to_string());
-            }
+        if attr.ns == Some("args")
+            && attr.key == "env_alias"
+            && let Some(alias) = attr.get_as::<&str>()
+        {
+            aliases.push(alias.to_string());
         }
     }
     aliases
@@ -563,5 +564,18 @@ mod tests {
         }
         // Deterministic: two renders are byte-identical.
         assert_eq!(html, render());
+    }
+}
+
+#[cfg(test)]
+mod regeneration_tests {
+    use super::render;
+
+    /// The committed page must be exactly what the generator emits today;
+    /// regenerate with `rust-knowledge config-docs` after changing shapes.
+    #[test]
+    fn regeneration_reproduces_the_committed_page() {
+        let committed = include_str!("../../../docs/config-reference.html");
+        assert_eq!(render(), committed);
     }
 }

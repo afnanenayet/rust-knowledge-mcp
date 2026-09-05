@@ -168,10 +168,7 @@ enum Command {
     /// Generate the HTML configuration reference page.
     ConfigDocs {
         /// Output file path (defaults to docs/config-reference.html).
-        #[facet(
-            args::named,
-            default = std::path::PathBuf::from("docs/config-reference.html")
-        )]
+        #[facet(args::named, default = "docs/config-reference.html")]
         output: PathBuf,
     },
 }
@@ -789,7 +786,11 @@ mod tests {
             Ok(_) => panic!("search without a query must not parse"),
         }
         // Missing the required FILE positional.
-        assert!(parse(&["eval"]).into_result().is_err());
+        match parse(&["eval"]).into_result() {
+            Err(DriverError::Help { .. }) => {}
+            Err(other) => panic!("expected Help for missing FILE, got {other:?}"),
+            Ok(_) => panic!("eval without a file must not parse"),
+        }
     }
 
     #[test]
