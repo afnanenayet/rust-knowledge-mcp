@@ -96,7 +96,8 @@ impl KnowledgeServer {
             Ok(hits) => hits,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "search failed: {e}. The index may be stale; run rust-knowledge index."
+                    "search failed: {e}. Either the query sanitized to nothing, or \
+                     the index is stale; run rust-knowledge index."
                 ))]));
             }
         };
@@ -183,7 +184,8 @@ impl KnowledgeServer {
             Ok(infos) => infos,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "symbol lookup failed: {e}. The index may be stale; run rust-knowledge index."
+                    "symbol lookup failed: {e}. Either the symbol sanitized to \
+                     nothing, or the index is stale; run rust-knowledge index."
                 ))]));
             }
         };
