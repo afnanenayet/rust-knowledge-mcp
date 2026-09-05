@@ -17,7 +17,7 @@ use facet::{
 };
 use facet_reflect::Peek;
 use figue::Attr;
-use knowledge_index::config::{IndexDirEnv, McpArgs};
+use knowledge_index::config::{IndexDirEnv, McpArgs, MCP_DESCRIPTION};
 
 use crate::{ABOUT, Cli, PROGRAM};
 
@@ -51,12 +51,7 @@ pub fn render() -> String {
     ));
 
     render_binary_section(&mut html, PROGRAM, ABOUT, Cli::SHAPE);
-    render_binary_section(
-        &mut html,
-        "knowledge-mcp",
-        "MCP server exposing the rust-knowledge retrieval engine",
-        McpArgs::SHAPE,
-    );
+    render_binary_section(&mut html, "knowledge-mcp", MCP_DESCRIPTION, McpArgs::SHAPE);
     render_env_section(&mut html);
 
     html.push_str(concat!(
@@ -247,13 +242,42 @@ fn kebab(name: &str) -> String {
 // Defaults
 // ==========================================================================
 
+/// Rendered instead of a default whose shape does not fit the evaluation
+/// buffer (see `render_default`).
+const DEFAULT_NOT_RENDERED: &str = "(default not rendered)";
+
+/// Bytes of scratch space for evaluating a field default in place. A
+/// shape whose layout does not fit renders the `(default not rendered)`
+/// placeholder instead of being evaluated.
+const DEFAULT_BUF_SIZE: usize = 1024;
+
+/// Alignment guaranteed by the `#[repr(align(16))]` on the buffer type
+/// below (repr wants an integer literal, so this constant restates it for
+/// the guard in `render_default`); re-checked against each shape's layout
+/// before any in-place write.
+const DEFAULT_BUF_ALIGN: usize = 16;
+
+/// Backing storage for evaluating a field default in place.
+///
+/// `#[repr(align(16))]` makes the buffer's alignment a property of its
+/// type, so the SAFETY arguments below rest on facts the code establishes
+/// (alignment) and checks (size), not on assumptions about the default
+/// types that happen to exist today.
+// `align(16)` here must stay in sync with DEFAULT_BUF_ALIGN above;
+// `#[repr(align)]` accepts only an integer literal.
+#[repr(align(16))]
+struct DefaultBuf([u8; DEFAULT_BUF_SIZE]);
+
 /// Render the default value declared on a field.
 ///
 /// `#[facet(default = ...)]` (Custom) and `#[facet(default)]` (FromTrait)
-/// are evaluated exactly the way figue evaluates them before parsing: the
-/// default function initializes a stack buffer, then the value is read
-/// through its Display impl. Fields with no default render `unset` when
-/// optional.
+/// are evaluated the way figue evaluates them before parsing: the default
+/// function initializes a stack buffer, then the value is read through its
+/// Display impl. Unlike figue, the buffer's alignment is guaranteed by its
+/// type and its size is checked against the shape's layout, so a shape
+/// that does not fit renders the `(default not rendered)` placeholder
+/// instead of being evaluated out of bounds. Fields with no default render
+/// `unset` when optional.
 fn render_default(field: &Field) -> String {
     let Some(default_source) = field.default.as_ref() else {
         return if matches!(field.shape().def, Def::Option(_)) {
@@ -268,10 +292,19 @@ fn render_default(field: &Field) -> String {
         return "(empty list)".to_string();
     }
 
-    // All default types in these shapes (bool, usize, String, PathBuf) fit
-    // in a small stack buffer.
-    let mut storage = [0u8; 1024];
-    let ptr = storage.as_mut_ptr().cast::<()>();
+    // Guard every in-place write with what the buffer actually provides:
+    // the value must fit in DEFAULT_BUF_SIZE bytes and must not require
+    // stricter alignment than DEFAULT_BUF_ALIGN. Anything else renders a
+    // placeholder rather than writing out of bounds or misaligned.
+    let Ok(layout) = shape.layout.sized_layout() else {
+        return DEFAULT_NOT_RENDERED.to_string();
+    };
+    if layout.size() > DEFAULT_BUF_SIZE || layout.align() > DEFAULT_BUF_ALIGN {
+        return DEFAULT_NOT_RENDERED.to_string();
+    }
+
+    let mut storage = DefaultBuf([0u8; DEFAULT_BUF_SIZE]);
+    let ptr = storage.0.as_mut_ptr().cast::<()>();
     match default_source {
         DefaultSource::FromTrait => {
             let Some(TypeOps::Direct(ops)) = shape.type_ops else {
@@ -280,15 +313,21 @@ fn render_default(field: &Field) -> String {
             let Some(default_fn) = ops.default_in_place else {
                 return "(type default)".to_string();
             };
-            // SAFETY: `ptr` points to 1024 writable, sufficiently aligned
-            // bytes; `default_fn` fully initializes a value of `shape` in
-            // place, per its contract.
+            // SAFETY: `ptr` is the start of `storage`, DEFAULT_BUF_SIZE
+            // writable bytes aligned to DEFAULT_BUF_ALIGN by
+            // `#[repr(align(16))]`; the guard above established that a value
+            // of `shape` fits (`layout.size() <= DEFAULT_BUF_SIZE`) and is
+            // sufficiently aligned (`layout.align() <= DEFAULT_BUF_ALIGN`).
+            // `default_fn`'s contract is to fully initialize a value of
+            // `shape` at the target.
             unsafe { default_fn(ptr) };
         }
         DefaultSource::Custom(fn_ptr) => {
             let uninit = PtrUninit::new_sized(ptr);
-            // SAFETY: same buffer, and the custom default fully initializes
-            // a value of `shape` in place, per the facet derive contract.
+            // SAFETY: same buffer, size and alignment guarantees as the
+            // FromTrait arm above; the custom default generated by the
+            // facet derive fully initializes a value of `shape` at the
+            // target and returns the initialized pointer.
             unsafe { (*fn_ptr)(uninit) };
         }
     }
@@ -322,7 +361,8 @@ fn render_default(field: &Field) -> String {
 fn render_binary_section(html: &mut String, program: &str, about: &str, shape: &'static Shape) {
     let id = kebab(program);
     html.push_str(&format!(
-        "<section id=\"{id}\">\n<h2><code>{}</code></h2>\n<p>{}</p>\n",
+        "<section id=\"{}\">\n<h2><code>{}</code></h2>\n<p>{}</p>\n",
+        esc(&id),
         esc(program),
         esc(about),
     ));
@@ -367,7 +407,8 @@ fn render_subcommand(html: &mut String, program: &str, variant: &Variant) {
     collect_arg_rows(variant.data.fields, &mut rows);
 
     html.push_str(&format!(
-        "<h4 id=\"command-{name}\"><code>{} {}</code></h4>\n",
+        "<h4 id=\"command-{}\"><code>{} {}</code></h4>\n",
+        esc(&name),
         esc(program),
         esc(&name),
     ));
@@ -545,6 +586,81 @@ mod tests {
         ] {
             assert_eq!(kebab(raw), expected, "kebab({raw})");
         }
+    }
+
+    /// Defaults that fit the buffer are evaluated and rendered: both
+    /// `DefaultSource` variants, including a heap-carrying type that must
+    /// be dropped through the shape's type ops afterwards.
+    #[test]
+    fn in_bounds_defaults_render_their_values() {
+        #[derive(Facet)]
+        struct Probe {
+            #[facet(default)]
+            from_trait: bool,
+            #[facet(default = 8)]
+            custom_usize: usize,
+            #[facet(default = "probe")]
+            custom_string: String,
+        }
+        let fields = struct_fields(Probe::SHAPE);
+        let named = |name: &str| {
+            fields
+                .iter()
+                .find(|field| field.effective_name() == name)
+                .unwrap_or_else(|| panic!("probe field {name} missing"))
+        };
+        assert_eq!(render_default(named("from_trait")), "false");
+        assert_eq!(render_default(named("custom_usize")), "8");
+        assert_eq!(render_default(named("custom_string")), "probe");
+    }
+
+    /// A default type larger than the evaluation buffer renders the
+    /// `(default not rendered)` placeholder instead of being evaluated
+    /// out of bounds.
+    #[test]
+    fn oversized_default_renders_the_placeholder() {
+        #[derive(Facet)]
+        struct Probe {
+            #[facet(default)]
+            payload: [u64; 200],
+        }
+        assert!(
+            std::mem::size_of::<[u64; 200]>() > DEFAULT_BUF_SIZE,
+            "probe type must actually exceed the buffer",
+        );
+        let field = struct_fields(Probe::SHAPE)
+            .first()
+            .expect("probe shape has a field");
+        assert!(field.default.is_some(), "probe field must carry a default");
+        assert_eq!(render_default(field), DEFAULT_NOT_RENDERED);
+    }
+
+    /// A default type requiring stricter alignment than the buffer's
+    /// `#[repr(align(16))]` also renders the placeholder.
+    #[test]
+    fn overaligned_default_renders_the_placeholder() {
+        #[repr(align(32))]
+        #[derive(Default, Facet)]
+        struct Probe {
+            value: u8,
+        }
+        #[derive(Facet)]
+        struct Holder {
+            #[facet(default)]
+            field: Probe,
+        }
+        // Constructing and reading the probe keeps its field live and pins
+        // the alignment this test relies on.
+        let probe = Probe::default();
+        assert_eq!(probe.value, 0);
+        assert!(
+            std::mem::align_of_val(&probe) > DEFAULT_BUF_ALIGN,
+            "probe must be more strictly aligned than the buffer",
+        );
+        let field = struct_fields(Holder::SHAPE)
+            .first()
+            .expect("holder shape has a field");
+        assert_eq!(render_default(field), DEFAULT_NOT_RENDERED);
     }
 
     #[test]

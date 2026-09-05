@@ -48,6 +48,15 @@ pub struct Builtins {
     pub version: bool,
 }
 
+/// User-facing description of the `knowledge-mcp` binary.
+///
+/// Single source for every surface that describes the binary: the
+/// additional `--help` description (passed to [parse_std_args] by its
+/// `main`) and the generated HTML reference page. The struct-level doc
+/// comment below is the API-documentation summary figue also prints as
+/// the first help line; this const is the description proper.
+pub const MCP_DESCRIPTION: &str = "MCP server exposing the rust-knowledge retrieval engine";
+
 /// Full argument surface of the `knowledge-mcp` binary.
 #[derive(Facet, Debug)]
 pub struct McpArgs {
@@ -212,7 +221,7 @@ mod tests {
 
     const PROGRAM: &str = "knowledge-mcp";
     const VERSION: &str = "0.1.0";
-    const DESCRIPTION: &str = "MCP server exposing the rust-knowledge retrieval engine";
+    const DESCRIPTION: &str = MCP_DESCRIPTION;
 
     fn parse_mcp(argv: &[&str]) -> DriverOutcome<McpArgs> {
         parse_args(argv, PROGRAM, VERSION, DESCRIPTION)

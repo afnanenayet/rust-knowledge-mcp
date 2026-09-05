@@ -55,6 +55,21 @@ every command, flag, environment variable and default — generated from those
 same shapes, so it cannot drift from the parsing code. After changing any
 shape, regenerate it with `rust-knowledge config-docs` and commit the result.
 
+figue deviates from the old clap parser in three permissive ways (recorded
+here so nobody files them as regressions; every clap-era invocation behaves
+exactly as before, and the deviations only affect argv that clap rejected):
+
+- `--help`/`-h` and `--version`/`-V` are accepted after a subcommand name
+  (`rust-knowledge search --version` exits 0; clap required them at the
+  top level and exited 2).
+- An explicit help or version token anywhere in argv wins even where a
+  value was expected: `rust-knowledge --manifest-path --help` prints help
+  and exits 0, where clap exited 2 (`--help` was the missing value).
+- Hyphen-leading tokens are consumed as values where clap refused them:
+  `rust-knowledge --index-dir -h packages` runs `packages` (the `-h` is
+  the `--index-dir` value), and `search foo --package --help` filters by
+  the literal `--help` instead of exiting 2.
+
 ## MCP
 
 The same engine is exposed as an MCP server with three tools:

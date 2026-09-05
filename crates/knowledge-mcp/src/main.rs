@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use figue::DriverError;
 use knowledge_index::config::{
     McpArgs,
+    MCP_DESCRIPTION,
     parse_std_args,
     resolve_index_dir,
     resolve_log_filter,
@@ -34,7 +35,7 @@ fn main() -> ExitCode {
     let mut cli = match parse_std_args::<McpArgs>(
         "knowledge-mcp",
         env!("CARGO_PKG_VERSION"),
-        "MCP server exposing the rust-knowledge retrieval engine",
+        MCP_DESCRIPTION,
     )
     .into_result()
     {
