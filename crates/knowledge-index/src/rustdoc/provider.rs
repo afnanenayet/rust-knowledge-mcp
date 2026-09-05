@@ -9,12 +9,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use cargo_metadata::{Package, TargetKind};
 use knowledge_core::PackageIdentity;
 use tracing::{info, info_span};
 
-use crate::cargo::CargoUniverse;
+use crate::cargo::{CachedCargo, CargoUniverse, resolve};
 use crate::error::IndexError;
 
 /// A rustdoc JSON artifact for one resolved package.
@@ -70,25 +71,26 @@ impl GeneratedRustdocProvider {
         }
     }
 
-    /// The cargo invocation prefix. An explicit RUST_KNOWLEDGE_CARGO binary
-    /// replaces the PATH lookup (and suppresses the +toolchain argument: the
-    /// caller controls the toolchain, including the rustdoc on PATH).
+    /// The resolved cargo invocation for this provider's toolchain, shared
+    /// with the `cargo metadata` call site (see `crate::cargo::resolve`)
+    /// so one index build can never mix two different cargo binaries. An
+    /// explicit RUST_KNOWLEDGE_CARGO binary still suppresses the
+    /// `+toolchain` argument: the caller controls the toolchain, including
+    /// the rustdoc on PATH.
+    fn resolved_cargo(&self) -> Arc<CachedCargo> {
+        resolve(self.toolchain.as_deref())
+    }
+
+    /// The invocation prefix, for display in diagnostics.
     fn cargo_argv(&self) -> Vec<String> {
-        if let Ok(explicit) = std::env::var("RUST_KNOWLEDGE_CARGO")
-            && !explicit.trim().is_empty()
-        {
-            return vec![explicit.trim().to_string()];
-        }
-        match &self.toolchain {
-            Some(t) => vec!["cargo".into(), format!("+{t}")],
-            None => vec!["cargo".into()],
-        }
+        self.resolved_cargo().argv()
     }
 
     fn command(&self, args: &[String]) -> Command {
-        let prefix = self.cargo_argv();
-        let mut cmd = Command::new(prefix.first().expect("cargo argv is never empty"));
-        for arg in prefix.iter().skip(1) {
+        let cargo = self.resolved_cargo();
+        let resolved = cargo.resolved();
+        let mut cmd = Command::new(&resolved.program);
+        for arg in &resolved.pre_args {
             cmd.arg(arg);
         }
         for arg in args {
@@ -99,11 +101,7 @@ impl GeneratedRustdocProvider {
     }
 
     fn query_cargo_version(&self) -> Option<String> {
-        self.command(&["--version".into()])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        self.resolved_cargo().version()
     }
 }
 
