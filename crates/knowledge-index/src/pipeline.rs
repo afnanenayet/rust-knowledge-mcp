@@ -23,6 +23,9 @@ pub struct IndexOptions {
     pub prebuilt_rustdoc: Option<PathBuf>,
     /// Skip rustdoc entirely (metadata + markdown only).
     pub skip_rustdoc: bool,
+    /// Explicit cargo binary (frontends' config layer). None falls back to
+    /// $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
+    pub cargo: Option<PathBuf>,
 }
 
 impl Default for IndexOptions {
@@ -32,6 +35,7 @@ impl Default for IndexOptions {
             toolchain: Some("nightly".to_string()),
             prebuilt_rustdoc: None,
             skip_rustdoc: false,
+            cargo: None,
         }
     }
 }
@@ -54,7 +58,7 @@ pub fn index_workspace(
     index_dir: Option<&Path>,
     options: &IndexOptions,
 ) -> Result<IndexOutcome, IndexError> {
-    let universe = CargoUniverse::load(manifest_path)?;
+    let universe = CargoUniverse::load_with(manifest_path, options.cargo.as_deref())?;
     let index_dir = index_dir
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_index_dir(universe.workspace_root()));
@@ -71,6 +75,7 @@ pub fn index_workspace(
             &universe,
             index_dir.join("cache").join("rustdoc"),
             options.toolchain.clone(),
+            options.cargo.clone(),
         )),
     };
 

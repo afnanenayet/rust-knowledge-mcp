@@ -57,27 +57,45 @@ pub struct GeneratedRustdocProvider {
     artifact_dir: PathBuf,
     /// Toolchain passed to cargo (e.g. "nightly"); None = plain cargo.
     toolchain: Option<String>,
+    /// Explicit cargo binary resolved by the caller's config layer; None
+    /// falls back to $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
+    cargo: Option<PathBuf>,
 }
 
 impl GeneratedRustdocProvider {
-    pub fn new(universe: &CargoUniverse, artifact_dir: PathBuf, toolchain: Option<String>) -> Self {
+    pub fn new(
+        universe: &CargoUniverse,
+        artifact_dir: PathBuf,
+        toolchain: Option<String>,
+        cargo: Option<PathBuf>,
+    ) -> Self {
         GeneratedRustdocProvider {
             manifest_path: universe.workspace_root().join("Cargo.toml"),
             workspace_root: universe.workspace_root().to_path_buf(),
             target_directory: universe.target_directory().to_path_buf(),
             artifact_dir,
             toolchain,
+            cargo,
         }
     }
 
-    /// The cargo invocation prefix. An explicit RUST_KNOWLEDGE_CARGO binary
-    /// replaces the PATH lookup (and suppresses the +toolchain argument: the
-    /// caller controls the toolchain, including the rustdoc on PATH).
+    /// The cargo invocation prefix. An explicit cargo binary (from the
+    /// constructor or $RUST_KNOWLEDGE_CARGO) replaces the PATH lookup (and
+    /// suppresses the +toolchain argument: the caller controls the
+    /// toolchain, including the rustdoc on PATH).
     fn cargo_argv(&self) -> Vec<String> {
-        if let Ok(explicit) = std::env::var("RUST_KNOWLEDGE_CARGO")
-            && !explicit.trim().is_empty()
-        {
-            return vec![explicit.trim().to_string()];
+        let explicit = self
+            .cargo
+            .as_ref()
+            .map(|path| path.to_string_lossy().trim().to_string())
+            .or_else(|| {
+                std::env::var("RUST_KNOWLEDGE_CARGO")
+                    .ok()
+                    .map(|cargo| cargo.trim().to_string())
+            })
+            .filter(|explicit| !explicit.is_empty());
+        if let Some(explicit) = explicit {
+            return vec![explicit];
         }
         match &self.toolchain {
             Some(t) => vec!["cargo".into(), format!("+{t}")],

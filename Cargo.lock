@@ -997,7 +997,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "facet",
- "facet-reflect",
  "figue",
  "knowledge-core",
  "knowledge-index",

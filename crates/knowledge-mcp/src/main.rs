@@ -5,73 +5,43 @@
 //! Typical client configuration:
 //! {"mcpServers": {"rust-knowledge": {"command": "knowledge-mcp",
 //!   "args": ["--manifest-path", "/path/to/workspace/Cargo.toml"]}}}
+//!
+//! Arguments are parsed by figue over a facet shape (issue #2): the
+//! flattened config root layers CLI flags over the RUST_KNOWLEDGE_* env
+//! vars over defaults with figue's own precedence, and
+//! figue::FigueBuiltins contributes --help/--version and friends.
 
 use std::process::ExitCode;
 
-use figue::DriverError;
 use knowledge_index::config::{
-    McpArgs,
     MCP_DESCRIPTION,
+    McpArgs,
+    effective_log_filter,
     parse_std_args,
-    resolve_index_dir,
-    resolve_log_filter,
-    std_argv_requests_help,
 };
 use knowledge_mcp::KnowledgeServer;
 use rmcp::service::serve_server;
 use rmcp::transport::stdio;
 
 fn main() -> ExitCode {
-    // MCP speaks JSON-RPC on stdout; everything else must go to stderr.
-    // Logging initializes before parsing so parse errors are logged to
-    // stderr only, never onto the protocol channel.
+    // Parse first: the log filter itself comes from figue's config layer
+    // (--log > $RUST_KNOWLEDGE_LOG > $RUST_LOG > default), and parse
+    // diagnostics go to stderr, so stdout only ever carries protocol
+    // traffic. Logging inits right after the parse; nothing is logged
+    // before that, and tracing macros without a subscriber are no-ops.
+    // DriverOutcome::unwrap is figue's native outcome handling: help,
+    // version, completions and schemas print to stdout and exit 0;
+    // diagnostics print to stderr and exit 1 (git-like-multitool recipe).
+    let cli =
+        parse_std_args::<McpArgs>("knowledge-mcp", env!("CARGO_PKG_VERSION"), MCP_DESCRIPTION)
+            .unwrap();
+
     tracing_subscriber::fmt()
-        .with_env_filter(resolve_log_filter(false))
+        .with_env_filter(effective_log_filter(false, &cli.config.log))
         .with_writer(std::io::stderr)
         .with_target(false)
         .compact()
         .init();
-
-    let mut cli = match parse_std_args::<McpArgs>(
-        "knowledge-mcp",
-        env!("CARGO_PKG_VERSION"),
-        MCP_DESCRIPTION,
-    )
-    .into_result()
-    {
-        Ok(output) => output.get(),
-        Err(DriverError::Help { text, suggestion }) => {
-            // Exit-code discipline matches clap: an explicit --help exits 0
-            // on stdout; figue's missing-required-fields help exits 2 on
-            // stderr. McpArgs has no required fields, so in practice only
-            // a genuine --help takes this arm.
-            let text = text.trim_end_matches('\n');
-            if std_argv_requests_help() {
-                println!("{text}");
-                if let Some(suggestion) = suggestion {
-                    println!("{}", suggestion.render_pretty());
-                }
-                return ExitCode::SUCCESS;
-            }
-            eprintln!("{text}");
-            if let Some(suggestion) = suggestion {
-                eprintln!("{}", suggestion.render_pretty());
-            }
-            return ExitCode::from(2);
-        }
-        Err(DriverError::Version { text }) => {
-            println!("{}", text.trim_end_matches('\n'));
-            return ExitCode::SUCCESS;
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    // Layered resolution: --index-dir > RUST_KNOWLEDGE_INDEX_DIR > engine
-    // default (<workspace>/.rust-knowledge).
-    cli.index_dir = resolve_index_dir(cli.index_dir.take());
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -84,7 +54,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if let Err(e) = runtime.block_on(run(cli.manifest_path, cli.index_dir)) {
+    if let Err(e) = runtime.block_on(run(cli.config.manifest_path, cli.config.index_dir)) {
         eprintln!("error: {e:#}");
         ExitCode::FAILURE
     } else {

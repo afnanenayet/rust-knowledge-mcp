@@ -53,15 +53,33 @@ impl CargoUniverse {
     /// Runs cargo metadata for the given manifest (or the current
     /// directory's ancestor workspace when manifest_path is None).
     pub fn load(manifest_path: Option<&Path>) -> Result<Self, IndexError> {
+        Self::load_with(manifest_path, None)
+    }
+
+    /// Like [load](Self::load), with an explicit cargo binary. A None
+    /// cargo falls back to $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
+    pub fn load_with(
+        manifest_path: Option<&Path>,
+        cargo: Option<&Path>,
+    ) -> Result<Self, IndexError> {
         let span = info_span!("cargo_metadata");
         let _enter = span.enter();
 
         let mut cmd = MetadataCommand::new();
-        // Escape hatch for environments where cargo is not on PATH.
-        if let Ok(cargo) = std::env::var("RUST_KNOWLEDGE_CARGO")
-            && !cargo.trim().is_empty()
-        {
-            cmd.cargo_path(cargo.trim());
+        // Escape hatch for environments where cargo is not on PATH: an
+        // explicit cargo binary (resolved by the frontends' figue config
+        // layer) beats the env var.
+        let explicit = cargo
+            .map(|path| path.to_string_lossy().trim().to_string())
+            .filter(|cargo| !cargo.is_empty())
+            .or_else(|| {
+                std::env::var("RUST_KNOWLEDGE_CARGO")
+                    .ok()
+                    .map(|cargo| cargo.trim().to_string())
+                    .filter(|cargo| !cargo.is_empty())
+            });
+        if let Some(cargo) = explicit {
+            cmd.cargo_path(cargo);
         }
         if let Some(path) = manifest_path {
             cmd.manifest_path(path);

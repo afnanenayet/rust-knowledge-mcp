@@ -1,27 +1,27 @@
 //! CLI entry point for the `rust-knowledge` binary.
 //!
-//! The argument surface is defined by facet-derived shapes parsed by figue,
-//! replacing the previous clap derives (issue #2). Flag names, shorts,
-//! defaults and subcommand names are frozen to the historical clap surface;
-//! see `docs/config-reference.html` (regenerate with `rust-knowledge
-//! config-docs`) for the generated reference.
+//! The argument surface follows the figue recipes (issue #2): a flattened
+//! figue config root over [WorkspaceConfig] layers CLI flags over the
+//! RUST_KNOWLEDGE_* environment variables over defaults with figue's own
+//! precedence; [figue::FigueBuiltins] contributes --help/--version and
+//! friends; subcommands come from `#[facet(args::subcommand)]`; and
+//! help/version/diagnostics with their exit codes are figue's own
+//! (`DriverOutcome::unwrap`), not emulated. The generated HTML reference
+//! page (`rust-knowledge config-docs`) is figue's `generate_html_help`
+//! output for the [Cli] shape.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-
-mod config_docs;
 
 use anyhow::Context;
 use facet::Facet;
-use figue::{self as args, DriverError};
+use figue::{self as args, FigueBuiltins};
 use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
 use knowledge_index::config::{
-    Builtins,
+    WorkspaceConfig,
+    effective_log_filter,
     parse_std_args,
-    resolve_index_dir,
-    resolve_log_filter,
-    std_argv_requests_help,
 };
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
@@ -30,23 +30,20 @@ const PROGRAM: &str = "rust-knowledge";
 const ABOUT: &str =
     "Search documentation of the resolved Cargo dependency universe of a workspace";
 
+/// Command-line surface of `rust-knowledge`.
 #[derive(Facet, Debug)]
 struct Cli {
-    /// Path to a Cargo.toml manifest. Defaults to the current directory.
-    #[facet(args::named)]
-    manifest_path: Option<PathBuf>,
+    /// Workspace knobs, layered by figue: flags beat $RUST_KNOWLEDGE_* env
+    /// vars, which beat defaults.
+    #[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]
+    config: WorkspaceConfig,
 
-    /// Directory for the knowledge index. Defaults to
-    /// <workspace>/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.
-    #[facet(args::named)]
-    index_dir: Option<PathBuf>,
-
-    /// Verbose logging.
+    /// Verbose logging (forces the "debug" filter).
     #[facet(args::named, args::short = 'v', default)]
     verbose: bool,
 
     #[facet(flatten)]
-    builtins: Builtins,
+    builtins: FigueBuiltins,
 
     #[facet(args::subcommand)]
     command: Command,
@@ -108,8 +105,8 @@ enum Command {
         // NOTE: the field is named in the singular on purpose: figue's
         // scalar-to-list coercion looks fields up by their Rust name, so a
         // `rename`d Vec field fails to deserialize single-occurrence flags
-        // (figue 4.0.5). The singular name kebab-cases to the frozen clap
-        // flag `--package` without a rename.
+        // (figue 4.0.5). The singular name kebab-cases to `--package`
+        // without a rename.
         #[facet(args::named, default)]
         package: Vec<String>,
 
@@ -165,7 +162,7 @@ enum Command {
         file: PathBuf,
     },
 
-    /// Generate the HTML configuration reference page.
+    /// Write the HTML configuration reference page.
     ConfigDocs {
         /// Output file path (defaults to docs/config-reference.html).
         #[facet(args::named, default = "docs/config-reference.html")]
@@ -174,44 +171,13 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let mut cli = match parse_std_args::<Cli>(PROGRAM, env!("CARGO_PKG_VERSION"), ABOUT)
-        .into_result()
-    {
-        Ok(output) => output.get(),
-        Err(DriverError::Help { text, suggestion }) => {
-            // figue also reports missing required fields as Help; a genuine
-            // --help/-h exits 0 on stdout (like clap), the diagnostic path
-            // exits 2 on stderr (like clap).
-            let text = text.trim_end_matches('\n');
-            if std_argv_requests_help() {
-                println!("{text}");
-                if let Some(suggestion) = suggestion {
-                    println!("{}", suggestion.render_pretty());
-                }
-                return ExitCode::SUCCESS;
-            }
-            eprintln!("{text}");
-            if let Some(suggestion) = suggestion {
-                eprintln!("{}", suggestion.render_pretty());
-            }
-            return ExitCode::from(2);
-        }
-        Err(DriverError::Version { text }) => {
-            println!("{}", text.trim_end_matches('\n'));
-            return ExitCode::SUCCESS;
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    // Layered resolution: --index-dir > RUST_KNOWLEDGE_INDEX_DIR > engine
-    // default (<workspace>/.rust-knowledge).
-    cli.index_dir = resolve_index_dir(cli.index_dir.take());
+    // DriverOutcome::unwrap is figue's native outcome handling: help,
+    // version, completions and schemas print to stdout and exit 0;
+    // diagnostics print to stderr and exit 1 (git-like-multitool recipe).
+    let cli = parse_std_args::<Cli>(PROGRAM, env!("CARGO_PKG_VERSION"), ABOUT).unwrap();
 
     tracing_subscriber::fmt()
-        .with_env_filter(resolve_log_filter(cli.verbose))
+        .with_env_filter(effective_log_filter(cli.verbose, &cli.config.log))
         .with_target(false)
         .compact()
         .init();
@@ -262,13 +228,44 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             json,
         } => symbol_lookup(cli, symbol, package, *json),
         Command::Eval { file } => eval(cli, file),
-        Command::ConfigDocs { output } => config_docs::write_to(output),
+        Command::ConfigDocs { output } => write_config_reference(output),
     }
 }
 
+/// Render the HTML configuration reference: figue's own generated HTML help
+/// over the whole [Cli] shape (no hand-rolled rendering; regenerate with
+/// `rust-knowledge config-docs`).
+fn render_config_reference() -> String {
+    let help = figue::HelpConfig {
+        program_name: Some(PROGRAM.to_string()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        description: Some(ABOUT.to_string()),
+        ..figue::HelpConfig::default()
+    };
+    figue::generate_html_help::<Cli>(&help)
+}
+
+/// Write the HTML configuration reference to `path`, creating parent
+/// directories.
+fn write_config_reference(path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("failed to create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, render_config_reference())
+        .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
 fn load_universe(cli: &Cli) -> anyhow::Result<CargoUniverse> {
-    CargoUniverse::load(cli.manifest_path.as_deref())
-        .context("failed to load the resolved Cargo universe")
+    CargoUniverse::load_with(
+        cli.config.manifest_path.as_deref(),
+        cli.config.cargo.as_deref(),
+    )
+    .context("failed to load the resolved Cargo universe")
 }
 
 fn packages(cli: &Cli, json: bool) -> anyhow::Result<()> {
@@ -347,6 +344,7 @@ fn dump_docs(
             &universe,
             index_dir.join("cache").join("rustdoc"),
             Some("nightly".to_string()),
+            cli.config.cargo.clone(),
         )),
     };
 
@@ -423,7 +421,8 @@ fn dump_docs(
 }
 
 fn index_dir(cli: &Cli, universe: &CargoUniverse) -> PathBuf {
-    cli.index_dir
+    cli.config
+        .index_dir
         .clone()
         .unwrap_or_else(|| universe.workspace_root().join(".rust-knowledge"))
 }
@@ -440,10 +439,11 @@ fn index(
         toolchain: toolchain.clone().or_else(|| Some("nightly".to_string())),
         prebuilt_rustdoc: prebuilt_rustdoc.clone(),
         skip_rustdoc: false,
+        cargo: cli.config.cargo.clone(),
     };
     let outcome = knowledge_index::index_workspace(
-        cli.manifest_path.as_deref(),
-        cli.index_dir.as_deref(),
+        cli.config.manifest_path.as_deref(),
+        cli.config.index_dir.as_deref(),
         &options,
     )
     .context("indexing failed")?;
@@ -474,9 +474,12 @@ fn parse_source_kinds(raw: &[String]) -> anyhow::Result<Vec<knowledge_core::Sour
 }
 
 fn open_retriever(cli: &Cli) -> anyhow::Result<knowledge_index::TantivyRetriever> {
-    knowledge_index::open_retriever(cli.manifest_path.as_deref(), cli.index_dir.as_deref())
-        .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
-        .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
+    knowledge_index::open_retriever(
+        cli.config.manifest_path.as_deref(),
+        cli.config.index_dir.as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
+    .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
 }
 
 fn search(
@@ -619,7 +622,9 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
         let root = retriever.meta().workspace_root.display().to_string();
         anyhow::ensure!(
             root.ends_with(corpus.trim_end_matches('/')),
-            "this eval file targets the {corpus:?} workspace; the current index              was built for {root:?}. Point --index-dir/--manifest-path at the              matching workspace."
+            "this eval file targets the {corpus:?} workspace; the current index \
+             was built for {root:?}. Point --index-dir/--manifest-path at the \
+             matching workspace."
         );
     }
 
@@ -658,28 +663,25 @@ mod tests {
     use std::path::Path;
 
     use figue::{DriverError, MockEnv};
-    use knowledge_index::config::{
-        argv_requests_help, parse_args, resolve_index_dir_with,
-    };
+    use knowledge_index::config::parse_args_with;
 
     use super::{ABOUT, Command, PROGRAM, Cli};
 
-    fn parse(argv: &[&str]) -> figue::DriverOutcome<Cli> {
-        parse_args(argv, PROGRAM, "0.1.0", ABOUT)
+    const VERSION: &str = "0.1.0";
+
+    fn parse(argv: &[&str], env: MockEnv) -> figue::DriverOutcome<Cli> {
+        parse_args_with(argv, env, PROGRAM, VERSION, ABOUT)
     }
 
     fn parse_ok(argv: &[&str]) -> Cli {
-        parse(argv)
+        parse(argv, MockEnv::new())
             .into_result()
             .expect("argv should parse")
             .get()
     }
 
-    /// Table-driven parity check over representative argv samples: the same
-    /// cases clap handled, asserted against the frozen clap surface
-    /// (baseline captured in STATUS.md, 2026-09-05).
     #[test]
-    fn both_value_forms_and_repeated_flags() {
+    fn parses_both_value_forms_and_repeated_flags() {
         let cli = parse_ok(&[
             "search",
             "tokio spawn",
@@ -715,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_clap() {
+    fn defaults_match_the_declared_surface() {
         let cli = parse_ok(&["search", "anything"]);
         let Command::Search {
             query,
@@ -732,31 +734,36 @@ mod tests {
         assert!(package.is_empty());
         assert!(source_kind.is_empty());
         assert!(item_kind.is_empty());
-        assert_eq!(*limit, 8, "--limit must default to 8 like clap");
+        assert_eq!(*limit, 8, "--limit must default to 8");
         assert!(!json);
 
         let cli = parse_ok(&["dump-docs"]);
         let Command::DumpDocs { rustdoc_scope, .. } = &cli.command else {
             panic!("expected dump-docs subcommand");
         };
-        assert_eq!(
-            rustdoc_scope, "workspace",
-            "--rustdoc-scope must default to workspace like clap"
-        );
+        assert_eq!(rustdoc_scope, "workspace");
+
+        // The config root materializes with its declared defaults when no
+        // layer provides a value.
+        assert_eq!(cli.config.manifest_path, None);
+        assert_eq!(cli.config.index_dir, None);
+        assert_eq!(cli.config.cargo, None);
+        assert_eq!(cli.config.log, "info");
+        assert!(!cli.verbose);
     }
 
     #[test]
-    fn global_flags_before_and_after_subcommand() {
+    fn global_flags_bind_before_and_after_the_subcommand() {
         let before = parse_ok(&["--manifest-path", "/before/Cargo.toml", "packages"]);
         let after = parse_ok(&["packages", "--manifest-path", "/after/Cargo.toml"]);
         assert_eq!(
-            before.manifest_path.as_deref(),
+            before.config.manifest_path.as_deref(),
             Some(Path::new("/before/Cargo.toml"))
         );
         assert_eq!(
-            after.manifest_path.as_deref(),
+            after.config.manifest_path.as_deref(),
             Some(Path::new("/after/Cargo.toml")),
-            "global flags must be accepted after the subcommand (adoption agency)"
+            "global flags must bind after the subcommand (figue adoption agency)"
         );
 
         let short = parse_ok(&["packages", "-v"]);
@@ -766,28 +773,43 @@ mod tests {
     }
 
     #[test]
-    fn missing_required_arguments_do_not_parse() {
-        // No subcommand at all.
-        match parse(&[]).into_result() {
-            Err(DriverError::Help { text, .. }) => {
-                assert!(!argv_requests_help(&[]));
-                assert!(text.contains(PROGRAM));
+    fn missing_subcommand_shows_help() {
+        // figue renders the top-level help and reports it as a success
+        // (exit code 0) when the subcommand is missing.
+        match parse(&[], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => {
+                assert!(e.is_success());
+                let text = format!("{e}");
+                assert!(text.contains(PROGRAM), "help text: {text}");
+                assert!(text.contains("search"), "help lists subcommands: {text}");
             }
-            Err(other) => panic!("expected Help for missing subcommand, got {other:?}"),
+            Err(other) => panic!("expected Help for empty argv, got {other:?}"),
             Ok(_) => panic!("empty argv must not parse"),
         }
-        // Missing the required QUERY positional.
-        match parse(&["search"]).into_result() {
-            Err(DriverError::Help { text, suggestion }) => {
-                assert!(text.contains("search"), "help should be for search: {text}");
-                assert!(suggestion.is_some(), "missing QUERY carries a suggestion");
+    }
+
+    #[test]
+    fn missing_positional_shows_help_and_suggestion() {
+        // figue's guided failure: when every missing field is a plain CLI
+        // argument, it renders the subcommand help plus a corrected-command
+        // suggestion and reports it as a success (exit code 0).
+        match parse(&["search"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => {
+                assert!(e.is_success());
+                assert_eq!(e.exit_code(), 0);
+                let text = format!("{e}");
+                assert!(text.contains("search"), "help text: {text}");
+                assert!(text.contains("<QUERY>"), "help text: {text}");
+                assert!(
+                    matches!(&e, DriverError::Help { suggestion: Some(_), .. }),
+                    "a missing positional carries a corrected-command suggestion"
+                );
             }
             Err(other) => panic!("expected Help for missing QUERY, got {other:?}"),
             Ok(_) => panic!("search without a query must not parse"),
         }
-        // Missing the required FILE positional.
-        match parse(&["eval"]).into_result() {
-            Err(DriverError::Help { .. }) => {}
+        match parse(&["eval"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => assert!(e.is_success()),
             Err(other) => panic!("expected Help for missing FILE, got {other:?}"),
             Ok(_) => panic!("eval without a file must not parse"),
         }
@@ -802,9 +824,11 @@ mod tests {
             &["frobnicate"][..],
             &["search", "query", "extra"][..],
         ] {
-            match parse(argv).into_result() {
-                Err(DriverError::Failed { .. }) => {}
-                Err(other) => panic!("expected Failed for {argv:?}, got {other:?}"),
+            match parse(argv, MockEnv::new()).into_result() {
+                Err(e) => {
+                    assert_eq!(e.exit_code(), 1, "figue error exit code for {argv:?}");
+                    assert!(!e.is_success());
+                }
                 Ok(_) => panic!("{argv:?} must not parse"),
             }
         }
@@ -813,9 +837,12 @@ mod tests {
     #[test]
     fn help_and_version_short_circuit() {
         for argv in [&["--help"][..], &["-h"][..]] {
-            match parse(argv).into_result() {
-                Err(DriverError::Help { text, .. }) => {
+            match parse(argv, MockEnv::new()).into_result() {
+                Err(e @ DriverError::Help { .. }) => {
+                    assert!(e.is_success());
+                    let text = format!("{e}");
                     assert!(text.contains("--manifest-path"), "help text: {text}");
+                    assert!(text.contains("--index-dir"), "help text: {text}");
                     assert!(text.contains("search"), "help lists subcommands: {text}");
                 }
                 Err(other) => panic!("expected Help for {argv:?}, got {other:?}"),
@@ -823,7 +850,7 @@ mod tests {
             }
         }
         for argv in [&["--version"][..], &["-V"][..]] {
-            match parse(argv).into_result() {
+            match parse(argv, MockEnv::new()).into_result() {
                 Err(DriverError::Version { text }) => {
                     assert_eq!(text.trim_end(), "rust-knowledge 0.1.0");
                 }
@@ -834,7 +861,20 @@ mod tests {
     }
 
     #[test]
-    fn per_subcommand_help_is_readable() {
+    fn completions_flag_short_circuits() {
+        match parse(&["--completions", "zsh"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Completions { .. }) => {
+                assert!(e.is_success());
+                let script = format!("{e}");
+                assert!(script.contains(PROGRAM), "completion script: {script}");
+            }
+            Err(other) => panic!("expected Completions, got {other:?}"),
+            Ok(_) => panic!("--completions must not parse to a value"),
+        }
+    }
+
+    #[test]
+    fn per_subcommand_help_names_itself() {
         for subcommand in [
             "packages",
             "dump-docs",
@@ -846,13 +886,14 @@ mod tests {
             "config-docs",
         ] {
             let argv = [subcommand, "--help"];
-            match parse(&argv).into_result() {
-                Err(DriverError::Help { text, .. }) => {
+            match parse(&argv, MockEnv::new()).into_result() {
+                Err(e @ DriverError::Help { .. }) => {
+                    assert!(e.is_success());
+                    let text = format!("{e}");
                     assert!(
                         text.contains(subcommand),
                         "help for {subcommand} should name it: {text}"
                     );
-                    assert!(argv_requests_help(&argv), "explicit help scan");
                 }
                 Err(other) => panic!("expected Help for {subcommand}, got {other:?}"),
                 Ok(_) => panic!("{subcommand} --help must not parse to a value"),
@@ -861,31 +902,59 @@ mod tests {
     }
 
     #[test]
-    fn index_dir_layering_matches_the_documented_hierarchy() {
-        // No flag, no env: absent (engine falls back to <workspace>/.rust-knowledge).
-        let cli = parse_ok(&["search", "foo"]);
-        let resolved = resolve_index_dir_with(cli.index_dir, MockEnv::new());
-        assert_eq!(resolved, None);
-
-        // No flag, env set: the env var fills the gap (additive behavior).
-        let cli = parse_ok(&["search", "foo"]);
+    fn cli_beats_env_end_to_end() {
+        // Flag set: it beats the env var.
         let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
-        let resolved = resolve_index_dir_with(cli.index_dir, env);
-        assert_eq!(resolved.as_deref(), Some(Path::new("/from-env")));
+        let cli = parse_ok_with_env(&["packages", "--index-dir", "/from-flag"], env);
+        assert_eq!(
+            cli.config.index_dir.as_deref(),
+            Some(Path::new("/from-flag")),
+            "CLI args must beat env vars (figue layer precedence)"
+        );
 
-        // Flag set: it beats the same env var.
-        let cli = parse_ok(&["search", "foo", "--index-dir", "/from-flag"]);
+        // No flag: the env var fills the gap.
         let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
-        let resolved = resolve_index_dir_with(cli.index_dir, env);
-        assert_eq!(resolved.as_deref(), Some(Path::new("/from-flag")));
+        let cli = parse_ok_with_env(&["packages"], env);
+        assert_eq!(cli.config.index_dir.as_deref(), Some(Path::new("/from-env")));
     }
 
     #[test]
-    fn config_docs_default_output_matches_the_documented_path() {
+    fn log_layers_cli_env_and_default() {
+        let env = MockEnv::from_pairs([("RUST_LOG", "warn")]);
+        let cli = parse_ok_with_env(&["packages"], env);
+        assert_eq!(cli.config.log, "warn");
+
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_LOG", "trace")]);
+        let cli = parse_ok_with_env(&["packages", "--log", "demo_core=debug"], env);
+        assert_eq!(
+            cli.config.log, "demo_core=debug",
+            "--log must beat the env layer"
+        );
+    }
+
+    #[test]
+    fn config_docs_default_output() {
         let cli = parse_ok(&["config-docs"]);
         let Command::ConfigDocs { output } = &cli.command else {
             panic!("expected config-docs subcommand");
         };
         assert_eq!(output, Path::new("docs/config-reference.html"));
+    }
+
+    #[test]
+    fn regeneration_reproduces_the_committed_page() {
+        let committed = include_str!("../../../docs/config-reference.html");
+        assert_eq!(
+            super::render_config_reference(),
+            committed,
+            "docs/config-reference.html must be regenerate with: cargo run -p knowledge-cli -- config-docs"
+        );
+    }
+
+    fn parse_ok_with_env(argv: &[&str], env: MockEnv) -> Cli {
+        parse(argv, env)
+            .into_result()
+            .expect("argv should parse")
+            .get()
     }
 }

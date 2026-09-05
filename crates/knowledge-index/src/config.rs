@@ -1,199 +1,134 @@
 //! Shared, facet-derived configuration for the `rust-knowledge` frontends.
 //!
-//! Both binaries define their user-facing surface through the types in this
-//! module, parsed by [figue](https://facet.rs/figue/), so CLI arguments,
-//! environment variables and defaults come from one source of truth. The
-//! generated HTML reference page (`rust-knowledge config-docs`) walks these
-//! same shapes.
+//! Both binaries declare a *flattened figue config root* over
+//! [WorkspaceConfig] (`#[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]`),
+//! following figue's layered-configuration recipe: the root's fields stay
+//! ordinary top-level flags (`--manifest-path`, `--index-dir`, ...) while
+//! figue's env layer addresses them through the exact-name aliases declared
+//! below (or the prefixed `RUST_KNOWLEDGE__<FIELD>` forms). figue merges
+//! the layers with its own precedence — CLI arguments over environment
+//! variables over defaults — so a flag overriding an env var IS figue
+//! behavior, not an emulation.
 //!
-//! Layer precedence is CLI arguments > environment variables > defaults.
-//! Two constraints shaped the design:
-//!
-//! * figue only env-addresses fields of a `#[facet(args::config)]` root, but
-//!   every config root also exposes a config-file flag (`--root <FILE>`,
-//!   which the driver then loads) and dotted override flags
-//!   (`--root.field <VALUE>`) — new flag surface these binaries never had,
-//!   and working file-based configuration, which issue #2 explicitly
-//!   defers. The argv shapes therefore keep config roots out entirely; the
-//!   `RUST_KNOWLEDGE_INDEX_DIR` override is modeled as its own env-only
-//!   facet shape ([IndexDirEnv]), layered by figue's env layer without any
-//!   CLI/file surface, and applied by the typed [resolve_index_dir] helper.
-//! * figue leaves `Option` fields absent from the merged value (facet
-//!   defaults them during deserialization), so a *flattened* struct whose
-//!   fields are all `Option` never materializes when no flag is given
-//!   ("missing field" errors). The two shared flags are therefore declared
-//!   directly on each binary's shape instead of being flattened in from a
-//!   shared struct; [Builtins] (bools with explicit defaults) and
-//!   [IndexDirEnv] remain the genuinely shared shapes.
+//! figue 4.0.5 constraint (probed, see STATUS.md): a config root must be a
+//! single level of leaf fields. A root whose fields are (or contain) plain
+//! structs — e.g. flattening a nested struct into the root — never
+//! materializes on empty argv ("missing field" errors). The defaulted
+//! `log` field below keeps the root present for every invocation.
 
 use std::path::PathBuf;
 
 use facet::Facet;
-use figue::{self as args, Driver, DriverError, DriverOutcome, MockEnv};
+use figue::{self as args, Driver, DriverError, DriverOutcome, FigueBuiltins, MockEnv};
 
-/// Standard `--help` / `--version` flags, frozen to the historical clap
-/// surface.
+/// Workspace knobs shared by `rust-knowledge` and `knowledge-mcp`.
 ///
-/// Deliberately not figue's `FigueBuiltins`: that type would add
-/// `--html-help`, `--completions` and `--export-jsonschemas` flags these
-/// binaries never exposed.
+/// Declared as a flattened figue config root in each binary's argv shape,
+/// so every field is simultaneously a top-level CLI flag, an
+/// environment-addressable value (via its alias, or
+/// `RUST_KNOWLEDGE__<FIELD>`), and file-addressable (`--config <FILE>`,
+/// `--config.<field>`) — all resolved by figue with CLI > env > file >
+/// defaults.
 #[derive(Facet, Debug)]
-pub struct Builtins {
-    /// Show help message and exit.
-    #[facet(args::named, args::short = 'h', args::help, default)]
-    pub help: bool,
+pub struct WorkspaceConfig {
+    /// Path to a Cargo.toml manifest. Defaults to the current directory.
+    #[facet(args::named, args::env_alias = "RUST_KNOWLEDGE_MANIFEST_PATH")]
+    pub manifest_path: Option<PathBuf>,
 
-    /// Show version and exit.
-    #[facet(args::named, args::short = 'V', args::version, default)]
-    pub version: bool,
+    /// Directory for the knowledge index. Defaults to
+    /// <workspace>/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.
+    #[facet(args::named, args::env_alias = "RUST_KNOWLEDGE_INDEX_DIR")]
+    pub index_dir: Option<PathBuf>,
+
+    /// Explicit cargo binary for metadata/rustdoc invocations. Defaults to
+    /// cargo on $PATH, or $RUST_KNOWLEDGE_CARGO.
+    #[facet(args::named, args::env_alias = "RUST_KNOWLEDGE_CARGO")]
+    pub cargo: Option<PathBuf>,
+
+    /// Tracing env-filter (e.g. "info", "demo_core=debug"). -v overrides
+    /// it with "debug".
+    #[facet(
+        args::named,
+        // figue uses the FIRST matching alias, so RUST_KNOWLEDGE_LOG wins
+        // over RUST_LOG when both are set.
+        args::env_alias = "RUST_KNOWLEDGE_LOG",
+        args::env_alias = "RUST_LOG",
+        default = "info"
+    )]
+    pub log: String,
 }
 
 /// User-facing description of the `knowledge-mcp` binary.
 ///
-/// Single source for every surface that describes the binary: the
-/// additional `--help` description (passed to [parse_std_args] by its
-/// `main`) and the generated HTML reference page. The struct-level doc
-/// comment below is the API-documentation summary figue also prints as
-/// the first help line; this const is the description proper.
+/// Single source for every surface that describes the binary: the figue
+/// help configuration passed by its `main` and any generated reference.
 pub const MCP_DESCRIPTION: &str = "MCP server exposing the rust-knowledge retrieval engine";
 
 /// Full argument surface of the `knowledge-mcp` binary.
 #[derive(Facet, Debug)]
 pub struct McpArgs {
-    /// Path to the workspace Cargo.toml the index was built for.
-    #[facet(args::named)]
-    pub manifest_path: Option<PathBuf>,
+    /// Workspace knobs, layered by figue (CLI > env > defaults).
+    #[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]
+    pub config: WorkspaceConfig,
 
-    /// Knowledge index directory. Defaults to <workspace>/.rust-knowledge
-    /// or $RUST_KNOWLEDGE_INDEX_DIR.
-    #[facet(args::named)]
-    pub index_dir: Option<PathBuf>,
-
-    /// Standard help and version flags.
+    /// Standard figue builtins: --help, --html-help, --version,
+    /// --completions, --export-jsonschemas.
     #[facet(flatten)]
-    pub builtins: Builtins,
+    pub builtins: FigueBuiltins,
 }
 
-/// Environment-only shape for the index directory override.
-///
-/// Never part of a binary's argv surface; it exists so figue's env layer
-/// (and the generated HTML reference) model `RUST_KNOWLEDGE_INDEX_DIR`
-/// declaratively. See [resolve_index_dir] for how the value is applied.
-#[derive(Facet, Debug)]
-pub struct IndexDirEnv {
-    /// Directory for the knowledge index. Defaults to
-    /// <workspace>/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.
-    #[facet(args::env_alias = "RUST_KNOWLEDGE_INDEX_DIR")]
-    pub index_dir: Option<PathBuf>,
-}
-
-/// Config-root wrapper required for figue to env-address [IndexDirEnv].
-#[derive(Facet, Debug)]
-struct IndexDirEnvRoot {
-    #[facet(args::config)]
-    global: IndexDirEnv,
-}
-
-/// Resolve the effective index directory.
-///
-/// Precedence: `--index-dir` > `$RUST_KNOWLEDGE_INDEX_DIR` (read through
-/// figue's env layer) > absent (the caller falls back to
-/// `<workspace>/.rust-knowledge`).
-pub fn resolve_index_dir(flag: Option<PathBuf>) -> Option<PathBuf> {
-    flag.or_else(|| env_index_dir(None))
-}
-
-/// [resolve_index_dir] against an explicit environment (for tests).
-pub fn resolve_index_dir_with(flag: Option<PathBuf>, env: MockEnv) -> Option<PathBuf> {
-    flag.or_else(|| env_index_dir(Some(env)))
-}
-
-fn env_index_dir(env: Option<MockEnv>) -> Option<PathBuf> {
-    let Ok(builder) = figue::builder::<IndexDirEnvRoot>() else {
-        return None;
-    };
-    let config = builder
-        .env(|layer| match env {
-            Some(mock) => layer.source(mock),
-            None => layer,
-        })
-        .build();
-    match Driver::new(config).run().into_result() {
-        Ok(output) => output.value.global.index_dir,
-        Err(_) => None,
-    }
-}
-
-/// Resolve the tracing env-filter.
-///
-/// Precedence: `--verbose` (forces debug) > `RUST_KNOWLEDGE_LOG` >
-/// `RUST_LOG` > the default `info`. The log filter cannot be a CLI flag
-/// itself because logging must be initialized before parsing (the MCP binary
-/// keeps stdout protocol-clean), so the hierarchy lives in this tested
-/// helper instead of the facet shapes.
-pub fn resolve_log_filter(verbose: bool) -> String {
-    resolve_log_filter_with(verbose, |name| std::env::var(name))
-}
-
-fn resolve_log_filter_with(
-    verbose: bool,
-    lookup: impl Fn(&str) -> Result<String, std::env::VarError>,
-) -> String {
+/// The effective tracing filter: `--verbose` forces "debug" (args beat the
+/// layered log filter), otherwise the figue-resolved `log` value applies.
+pub fn effective_log_filter(verbose: bool, log: &str) -> String {
     if verbose {
-        return "debug".to_string();
+        "debug".to_string()
+    } else {
+        log.to_string()
     }
-    lookup("RUST_KNOWLEDGE_LOG")
-        .or_else(|_| lookup("RUST_LOG"))
-        .unwrap_or_else(|_| "info".to_string())
 }
 
-/// Whether the real process argv explicitly requests help or version.
+/// Parse the real process argv into `T` through figue's layered driver:
+/// CLI arguments over environment variables over defaults.
 ///
-/// figue reports missing required fields as `DriverError::Help`; this
-/// distinguishes a genuine `--help` (exit 0 on stdout, like clap) from that
-/// diagnostic path (exit 2 on stderr, like clap).
-pub fn std_argv_requests_help() -> bool {
-    std::env::args()
-        .skip(1)
-        .any(|a| matches!(a.as_str(), "--help" | "-h" | "--version" | "-V"))
-}
-
-/// [std_argv_requests_help] over an explicit argv slice (for tests).
-pub fn argv_requests_help(argv: &[&str]) -> bool {
-    argv
-        .iter()
-        .any(|a| matches!(*a, "--help" | "-h" | "--version" | "-V"))
-}
-
-/// Parse the real process argv into `T`.
-///
-/// `program_name`, `version` and `description` drive `--help` / `--version`
-/// output, mirroring what clap's `#[command(...)]` attributes used to render.
+/// `program_name`, `version` and `description` drive figue's --help /
+/// --version output. The returned [DriverOutcome] carries figue's own
+/// help/version/diagnostics handling (see the figue recipes: match
+/// [DriverError] variants, or call `unwrap()` for figue's native
+/// print-and-exit behavior).
 pub fn parse_std_args<T: Facet<'static>>(
     program_name: &str,
     version: &str,
     description: &str,
 ) -> DriverOutcome<T> {
-    parse_common(std::env::args().skip(1), program_name, version, description)
-}
-
-/// Parse a fixed argv slice into `T` (for tests).
-pub fn parse_args<T: Facet<'static>>(
-    argv: &[&str],
-    program_name: &str,
-    version: &str,
-    description: &str,
-) -> DriverOutcome<T> {
-    parse_common(
-        argv.iter().map(|s| (*s).to_string()),
+    parse_layered(
+        std::env::args().skip(1),
+        None,
         program_name,
         version,
         description,
     )
 }
 
-fn parse_common<T: Facet<'static>>(
+/// [parse_std_args] over an explicit argv and environment, for tests.
+pub fn parse_args_with<T: Facet<'static>>(
+    argv: &[&str],
+    env: MockEnv,
+    program_name: &str,
+    version: &str,
+    description: &str,
+) -> DriverOutcome<T> {
+    parse_layered(
+        argv.iter().map(|s| (*s).to_string()),
+        Some(env),
+        program_name,
+        version,
+        description,
+    )
+}
+
+fn parse_layered<T: Facet<'static>>(
     argv: impl Iterator<Item = String>,
+    env: Option<MockEnv>,
     program_name: &str,
     version: &str,
     description: &str,
@@ -204,6 +139,10 @@ fn parse_common<T: Facet<'static>>(
     };
     let config = builder
         .cli(|cli| cli.args(argv))
+        .env(|layer| match env {
+            Some(mock) => layer.source(mock),
+            None => layer,
+        })
         .help(|help| {
             help.program_name(program_name)
                 .version(version)
@@ -217,134 +156,119 @@ fn parse_common<T: Facet<'static>>(
 mod tests {
     use std::path::Path;
 
-    use super::*;
+    use figue::{DriverError, MockEnv};
+
+    use super::{MCP_DESCRIPTION, McpArgs, effective_log_filter, parse_args_with};
 
     const PROGRAM: &str = "knowledge-mcp";
     const VERSION: &str = "0.1.0";
-    const DESCRIPTION: &str = MCP_DESCRIPTION;
 
-    fn parse_mcp(argv: &[&str]) -> DriverOutcome<McpArgs> {
-        parse_args(argv, PROGRAM, VERSION, DESCRIPTION)
+    fn parse_mcp(argv: &[&str], env: MockEnv) -> figue::DriverOutcome<McpArgs> {
+        parse_args_with(argv, env, PROGRAM, VERSION, MCP_DESCRIPTION)
+    }
+
+    fn parse_mcp_ok(argv: &[&str], env: MockEnv) -> McpArgs {
+        parse_mcp(argv, env)
+            .into_result()
+            .expect("argv should parse")
+            .get()
     }
 
     #[test]
-    fn resolve_log_filter_verbose_beats_everything() {
-        let filter = resolve_log_filter_with(true, |name| {
-            panic!("env must not be consulted when --verbose is set, got {name}");
-        });
-        assert_eq!(filter, "debug");
-    }
-
-    #[test]
-    fn resolve_log_filter_precedence() {
-        let none = |_: &str| Err(std::env::VarError::NotPresent);
-        assert_eq!(resolve_log_filter_with(false, none), "info");
-
-        let only_rust_log = |name: &str| match name {
-            "RUST_LOG" => Ok("warn".to_string()),
-            _ => Err(std::env::VarError::NotPresent),
-        };
-        assert_eq!(resolve_log_filter_with(false, only_rust_log), "warn");
-
-        let both = |name: &str| match name {
-            "RUST_LOG" => Ok("warn".to_string()),
-            "RUST_KNOWLEDGE_LOG" => Ok("trace".to_string()),
-            _ => Err(std::env::VarError::NotPresent),
-        };
-        assert_eq!(resolve_log_filter_with(false, both), "trace");
-    }
-
-    #[test]
-    fn resolve_index_dir_env_alias_honored() {
-        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
-        let resolved = resolve_index_dir_with(None, env);
-        assert_eq!(resolved.as_deref(), Some(Path::new("/from-env")));
-    }
-
-    #[test]
-    fn resolve_index_dir_flag_beats_env() {
-        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
-        let resolved = resolve_index_dir_with(Some(PathBuf::from("/from-flag")), env);
-        assert_eq!(
-            resolved.as_deref(),
-            Some(Path::new("/from-flag")),
-            "--index-dir must win over the environment layer"
-        );
-    }
-
-    #[test]
-    fn resolve_index_dir_absent_when_unset() {
-        let resolved = resolve_index_dir_with(None, MockEnv::new());
-        assert_eq!(resolved, None);
-    }
-
-    #[test]
-    fn argv_help_detection() {
-        assert!(argv_requests_help(&["--help"]));
-        assert!(argv_requests_help(&["-h"]));
-        assert!(argv_requests_help(&["search", "--version"]));
-        assert!(argv_requests_help(&["-V"]));
-        assert!(!argv_requests_help(&["search", "foo"]));
-        assert!(!argv_requests_help(&[]));
-        assert!(!argv_requests_help(&["--manifest-path", "-h/x"]));
-    }
-
-    #[test]
-    fn mcp_empty_argv_parses_to_none() {
-        let args = parse_mcp(&[]).into_result().expect("parse should succeed").value;
-        assert_eq!(args.manifest_path, None);
-        assert_eq!(args.index_dir, None);
+    fn mcp_empty_argv_parses_to_defaults() {
+        let args = parse_mcp_ok(&[], MockEnv::new());
+        assert_eq!(args.config.manifest_path, None);
+        assert_eq!(args.config.index_dir, None);
+        assert_eq!(args.config.cargo, None);
+        assert_eq!(args.config.log, "info");
         assert!(!args.builtins.help);
     }
 
     #[test]
-    fn mcp_both_flags_parse() {
-        let outcome = parse_mcp(&[
-            "--manifest-path",
-            "/ws/Cargo.toml",
-            "--index-dir",
-            "/idx",
+    fn mcp_flags_parse_both_value_forms() {
+        for argv in [
+            &["--manifest-path", "/ws/Cargo.toml", "--index-dir", "/idx"][..],
+            &["--manifest-path=/ws/Cargo.toml", "--index-dir=/idx"][..],
+        ] {
+            let args = parse_mcp_ok(argv, MockEnv::new());
+            assert_eq!(
+                args.config.manifest_path.as_deref(),
+                Some(Path::new("/ws/Cargo.toml"))
+            );
+            assert_eq!(args.config.index_dir.as_deref(), Some(Path::new("/idx")));
+        }
+    }
+
+    #[test]
+    fn env_layer_fills_the_gap_over_defaults() {
+        let env = MockEnv::from_pairs([
+            ("RUST_KNOWLEDGE_INDEX_DIR", "/idx-from-env"),
+            ("RUST_KNOWLEDGE_CARGO", "/cargo-from-env"),
         ]);
-        let args = outcome.into_result().expect("parse should succeed").value;
+        let args = parse_mcp_ok(&[], env);
         assert_eq!(
-            args.manifest_path.as_deref(),
-            Some(Path::new("/ws/Cargo.toml"))
+            args.config.index_dir.as_deref(),
+            Some(Path::new("/idx-from-env")),
+            "env vars must fill fields no flag set"
         );
-        assert_eq!(args.index_dir.as_deref(), Some(Path::new("/idx")));
+        assert_eq!(
+            args.config.cargo.as_deref(),
+            Some(Path::new("/cargo-from-env"))
+        );
     }
 
     #[test]
-    fn mcp_flag_equals_form_parses() {
-        let outcome = parse_mcp(&["--index-dir=/idx"]);
-        let args = outcome.into_result().expect("parse should succeed").value;
-        assert_eq!(args.index_dir.as_deref(), Some(Path::new("/idx")));
-        assert_eq!(args.manifest_path, None);
+    fn cli_beats_env_end_to_end() {
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/idx-from-env")]);
+        let args = parse_mcp_ok(&["--index-dir", "/idx-from-flag"], env);
+        assert_eq!(
+            args.config.index_dir.as_deref(),
+            Some(Path::new("/idx-from-flag")),
+            "CLI args must beat env vars (figue layer precedence)"
+        );
     }
 
     #[test]
-    fn mcp_env_alias_composes_with_flags() {
-        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
+    fn prefixed_env_var_form_is_honored() {
+        // Flattened config roots address fields as PREFIX__FIELD (the root
+        // field name is not part of the env var name).
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE__INDEX_DIR", "/idx-prefixed")]);
+        let args = parse_mcp_ok(&[], env);
+        assert_eq!(
+            args.config.index_dir.as_deref(),
+            Some(Path::new("/idx-prefixed"))
+        );
+    }
 
-        // No --index-dir flag: the env var fills the gap end to end.
-        let args = parse_mcp(&[]).into_result().expect("parse should succeed").value;
-        let resolved = resolve_index_dir_with(args.index_dir, env.clone());
-        assert_eq!(resolved.as_deref(), Some(Path::new("/from-env")));
+    #[test]
+    fn log_env_layering() {
+        // No env, no flag: the declared default.
+        let args = parse_mcp_ok(&[], MockEnv::new());
+        assert_eq!(args.config.log, "info");
 
-        // Flag present: it wins over the same env var.
-        let args = parse_mcp(&["--index-dir", "/from-flag"])
-            .into_result()
-            .expect("parse should succeed")
-            .value;
-        let resolved = resolve_index_dir_with(args.index_dir, env);
-        assert_eq!(resolved.as_deref(), Some(Path::new("/from-flag")));
+        // RUST_LOG fills the gap.
+        let env = MockEnv::from_pairs([("RUST_LOG", "warn")]);
+        let args = parse_mcp_ok(&[], env);
+        assert_eq!(args.config.log, "warn");
+
+        // RUST_KNOWLEDGE_LOG is the first alias, so it wins over RUST_LOG.
+        let env = MockEnv::from_pairs([("RUST_LOG", "warn"), ("RUST_KNOWLEDGE_LOG", "trace")]);
+        let args = parse_mcp_ok(&[], env);
+        assert_eq!(args.config.log, "trace");
+
+        // A --log flag beats every env var.
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_LOG", "trace")]);
+        let args = parse_mcp_ok(&["--log", "demo_core=debug"], env);
+        assert_eq!(args.config.log, "demo_core=debug");
     }
 
     #[test]
     fn mcp_unknown_flag_is_an_error() {
-        let outcome = parse_mcp(&["--bogus"]);
-        match outcome.into_result() {
-            Err(DriverError::Failed { .. }) => {}
-            Err(other) => panic!("expected Failed, got {other:?}"),
+        match parse_mcp(&["--bogus"], MockEnv::new()).into_result() {
+            Err(e) => {
+                assert_eq!(e.exit_code(), 1, "figue-native error exit code");
+                assert!(!e.is_success());
+            }
             Ok(_) => panic!("unknown flag must not parse"),
         }
     }
@@ -352,13 +276,16 @@ mod tests {
     #[test]
     fn mcp_help_flag_short_circuits() {
         for argv in [&["--help"][..], &["-h"][..]] {
-            match parse_mcp(argv).into_result() {
-                Err(DriverError::Help { text, .. }) => {
+            match parse_mcp(argv, MockEnv::new()).into_result() {
+                Err(e @ DriverError::Help { .. }) => {
+                    assert!(e.is_success());
+                    let text = format!("{e}");
                     assert!(text.contains("knowledge-mcp"), "help text: {text}");
                     assert!(text.contains("--manifest-path"), "help text: {text}");
+                    assert!(text.contains("--index-dir"), "help text: {text}");
                 }
-                Err(other) => panic!("expected Help, got {other:?}"),
-                Ok(_) => panic!("--help must not parse to a value"),
+                Err(other) => panic!("expected Help for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
             }
         }
     }
@@ -366,13 +293,20 @@ mod tests {
     #[test]
     fn mcp_version_flag_short_circuits() {
         for argv in [&["--version"][..], &["-V"][..]] {
-            match parse_mcp(argv).into_result() {
+            match parse_mcp(argv, MockEnv::new()).into_result() {
                 Err(DriverError::Version { text }) => {
                     assert_eq!(text.trim_end(), "knowledge-mcp 0.1.0");
                 }
-                Err(other) => panic!("expected Version, got {other:?}"),
-                Ok(_) => panic!("--version must not parse to a value"),
+                Err(other) => panic!("expected Version for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
             }
         }
+    }
+
+    #[test]
+    fn log_filter_resolution() {
+        assert_eq!(effective_log_filter(true, "info"), "debug");
+        assert_eq!(effective_log_filter(false, "warn"), "warn");
+        assert_eq!(effective_log_filter(false, "info"), "info");
     }
 }

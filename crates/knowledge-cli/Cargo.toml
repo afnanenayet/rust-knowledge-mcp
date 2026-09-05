@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 facet = { workspace = true }
-facet-reflect = { workspace = true }
 figue = { workspace = true }
 knowledge-core = { workspace = true }
 knowledge-index = { workspace = true }
