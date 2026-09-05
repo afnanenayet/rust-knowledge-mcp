@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-">
+<title>rust-knowledge configuration reference</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 62rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+h1 { font-size: 1.6rem; }
+h2 { border-bottom: 2px solid #8884; padding-bottom: 0.2rem; margin-top: 2.5rem; }
+h3 { margin-top: 1.6rem; }
+h4 { margin: 1.4rem 0 0.2rem; }
+table { border-collapse: collapse; width: 100%; margin: 0.6rem 0 1.2rem; }
+th, td { text-align: left; padding: 0.35rem 0.6rem; border: 1px solid #8884; vertical-align: top; }
+th { background: #8882; }
+code { font-family: ui-monospace, monospace; }
+.flag { white-space: nowrap; }
+.required { font-weight: 600; }
+.note { background: #8881; padding: 0.6rem 0.9rem; border-radius: 0.4rem; }
+nav ol { padding-left: 1.2rem; }
+footer { margin-top: 3rem; color: #888; font-size: 0.9rem; border-top: 1px solid #8884; padding-top: 0.6rem; }
+</style>
+</head>
+<body>
+<h1>rust-knowledge &amp; knowledge-mcp configuration reference</h1>
+<p class="note">This page is generated from the facet shapes that parse both binaries (regenerate with <code>rust-knowledge config-docs</code>), so the reference cannot drift from the code that interprets it. Configuration layers apply with precedence <strong>CLI arguments &gt; environment variables &gt; defaults</strong>.</p>
+<nav><ol><li><a href="#rust-knowledge">rust-knowledge</a></li><li><a href="#knowledge-mcp">knowledge-mcp</a></li><li><a href="#environment-variables">Environment variables</a></li></ol></nav>
+<section id="rust-knowledge">
+<h2><code>rust-knowledge</code></h2>
+<p>Search documentation of the resolved Cargo dependency universe of a workspace</p>
+<h3>Options</h3>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--manifest-path</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Path to a Cargo.toml manifest. Defaults to the current directory.</td></tr>
+<tr><td class="flag"><code>--index-dir</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Directory for the knowledge index. Defaults to &lt;workspace&gt;/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.</td></tr>
+<tr><td class="flag"><code>--verbose</code></td><td>v</td><td>BOOL</td><td>false</td><td></td><td>Verbose logging.</td></tr>
+<tr><td class="flag"><code>--help</code></td><td>h</td><td>BOOL</td><td>false</td><td></td><td>Show help message and exit.</td></tr>
+<tr><td class="flag"><code>--version</code></td><td>V</td><td>BOOL</td><td>false</td><td></td><td>Show version and exit.</td></tr>
+</tbody>
+</table>
+<h3>Subcommands</h3>
+<p>Global options are also accepted after the subcommand name.</p>
+<h4 id="command-packages"><code>rust-knowledge packages</code></h4>
+<p>List the packages in the resolved Cargo dependency universe.</p>
+<p class="note">Usage: <code>rust-knowledge packages [OPTIONS]</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--json</code></td><td></td><td>BOOL</td><td>false</td><td></td><td>Emit JSON (one object per line).</td></tr>
+</tbody>
+</table>
+<h4 id="command-dump-docs"><code>rust-knowledge dump-docs</code></h4>
+<p>Build the normalized documentation corpus and print it (debug view).</p>
+<p class="note">Usage: <code>rust-knowledge dump-docs [OPTIONS]</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--package</code></td><td></td><td>STRING (optional)</td><td>unset</td><td></td><td>Only documents of this package (name or name@version).</td></tr>
+<tr><td class="flag"><code>--rustdoc-scope</code></td><td></td><td>STRING</td><td>workspace</td><td></td><td>Which packages get rustdoc JSON generated.</td></tr>
+<tr><td class="flag"><code>--prebuilt-rustdoc</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Read prebuilt rustdoc JSON artifacts from this directory instead of invoking cargo.</td></tr>
+<tr><td class="flag"><code>--json</code></td><td></td><td>BOOL</td><td>false</td><td></td><td>Emit one JSON document per line.</td></tr>
+</tbody>
+</table>
+<h4 id="command-index"><code>rust-knowledge index</code></h4>
+<p>Build the persistent knowledge index for the workspace.</p>
+<p class="note">Usage: <code>rust-knowledge index [OPTIONS]</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--rustdoc-scope</code></td><td></td><td>STRING</td><td>workspace</td><td></td><td>Which packages get rustdoc JSON generated.</td></tr>
+<tr><td class="flag"><code>--toolchain</code></td><td></td><td>STRING (optional)</td><td>unset</td><td></td><td>Toolchain used for rustdoc generation (default: nightly).</td></tr>
+<tr><td class="flag"><code>--prebuilt-rustdoc</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Read prebuilt rustdoc JSON artifacts from this directory instead of invoking cargo.</td></tr>
+</tbody>
+</table>
+<h4 id="command-search"><code>rust-knowledge search</code></h4>
+<p>Search the knowledge index.</p>
+<p class="note">Usage: <code>rust-knowledge search [OPTIONS] &lt;QUERY&gt;</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>&lt;QUERY&gt;</code></td><td></td><td>STRING</td><td>—</td><td><span class="required">yes</span></td><td>Free-form query: natural language or Rust identifiers.</td></tr>
+<tr><td class="flag"><code>--package</code></td><td></td><td>STRING (repeatable)</td><td>(empty list)</td><td></td><td>Restrict to these packages (name or name@version). Repeatable.</td></tr>
+<tr><td class="flag"><code>--source-kind</code></td><td></td><td>STRING (repeatable)</td><td>(empty list)</td><td></td><td>Restrict to source kinds (rustdoc_item, rustdoc_module, crate_readme, markdown_document). Repeatable.</td></tr>
+<tr><td class="flag"><code>--item-kind</code></td><td></td><td>STRING (repeatable)</td><td>(empty list)</td><td></td><td>Restrict to item kinds (function, struct, trait, ...). Repeatable.</td></tr>
+<tr><td class="flag"><code>--limit</code></td><td></td><td>USIZE</td><td>8</td><td></td><td>Maximum number of results.</td></tr>
+<tr><td class="flag"><code>--json</code></td><td></td><td>BOOL</td><td>false</td><td></td><td>Emit JSON (one hit per line).</td></tr>
+</tbody>
+</table>
+<h4 id="command-get"><code>rust-knowledge get</code></h4>
+<p>Retrieve one document by its stable id.</p>
+<p class="note">Usage: <code>rust-knowledge get [OPTIONS] &lt;ID&gt;</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>&lt;ID&gt;</code></td><td></td><td>STRING</td><td>—</td><td><span class="required">yes</span></td><td>Document id (as printed by search).</td></tr>
+<tr><td class="flag"><code>--json</code></td><td></td><td>BOOL</td><td>false</td><td></td><td>Emit the full JSON document.</td></tr>
+</tbody>
+</table>
+<h4 id="command-symbol"><code>rust-knowledge symbol</code></h4>
+<p>Look up a symbol by (partial) path.</p>
+<p class="note">Usage: <code>rust-knowledge symbol [OPTIONS] &lt;SYMBOL&gt;</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>&lt;SYMBOL&gt;</code></td><td></td><td>STRING</td><td>—</td><td><span class="required">yes</span></td><td>Symbol path or last segment, e.g. demo_core::writer::Writer::flush or spawn_blocking.</td></tr>
+<tr><td class="flag"><code>--package</code></td><td></td><td>STRING (repeatable)</td><td>(empty list)</td><td></td><td>Restrict to these packages (name or name@version). Repeatable.</td></tr>
+<tr><td class="flag"><code>--json</code></td><td></td><td>BOOL</td><td>false</td><td></td><td>Emit JSON (one entry per line).</td></tr>
+</tbody>
+</table>
+<h4 id="command-eval"><code>rust-knowledge eval</code></h4>
+<p>Run the retrieval evaluation set against the knowledge index.</p>
+<p class="note">Usage: <code>rust-knowledge eval &lt;FILE&gt;</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>&lt;FILE&gt;</code></td><td></td><td>PATHBUF</td><td>—</td><td><span class="required">yes</span></td><td>Path to the eval file (TOML, [[case]] entries).</td></tr>
+</tbody>
+</table>
+<h4 id="command-config-docs"><code>rust-knowledge config-docs</code></h4>
+<p>Generate the HTML configuration reference page.</p>
+<p class="note">Usage: <code>rust-knowledge config-docs [OPTIONS]</code></p>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--output</code></td><td></td><td>PATHBUF</td><td>docs/config-reference.html</td><td></td><td>Output file path (defaults to docs/config-reference.html).</td></tr>
+</tbody>
+</table>
+</section>
+<section id="knowledge-mcp">
+<h2><code>knowledge-mcp</code></h2>
+<p>MCP server exposing the rust-knowledge retrieval engine</p>
+<h3>Options</h3>
+<table>
+<thead><tr><th>Argument</th><th>Short</th><th>Value</th><th>Default</th><th>Required</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>--manifest-path</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Path to the workspace Cargo.toml the index was built for.</td></tr>
+<tr><td class="flag"><code>--index-dir</code></td><td></td><td>PATHBUF (optional)</td><td>unset</td><td></td><td>Knowledge index directory. Defaults to &lt;workspace&gt;/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.</td></tr>
+<tr><td class="flag"><code>--help</code></td><td>h</td><td>BOOL</td><td>false</td><td></td><td>Show help message and exit.</td></tr>
+<tr><td class="flag"><code>--version</code></td><td>V</td><td>BOOL</td><td>false</td><td></td><td>Show version and exit.</td></tr>
+</tbody>
+</table>
+</section>
+<section id="environment-variables">
+<h2>Environment variables</h2>
+<p>Layered below CLI arguments: an explicit flag always wins over an environment variable, which wins over the built-in default.</p>
+<table>
+<thead><tr><th>Variable</th><th>Applies to</th><th>Overridden by</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td class="flag"><code>RUST_KNOWLEDGE_INDEX_DIR</code></td><td>both binaries</td><td><code>--index-dir</code></td><td>Directory for the knowledge index. Defaults to &lt;workspace&gt;/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.</td></tr>
+<tr><td class="flag"><code>RUST_KNOWLEDGE_LOG</code></td><td>both binaries</td><td>--verbose (rust-knowledge only)</td><td>tracing env-filter for log output. Precedence: --verbose (forces debug) &gt; RUST_KNOWLEDGE_LOG &gt; RUST_LOG &gt; info.</td></tr>
+<tr><td class="flag"><code>RUST_LOG</code></td><td>both binaries</td><td>RUST_KNOWLEDGE_LOG, --verbose</td><td>fallback tracing env-filter when RUST_KNOWLEDGE_LOG is unset.</td></tr>
+<tr><td class="flag"><code>RUST_KNOWLEDGE_CARGO</code></td><td>knowledge-index (engine)</td><td>nothing (no CLI flag)</td><td>path to the cargo executable the engine uses for cargo metadata and rustdoc generation; defaults to the cargo on PATH.</td></tr>
+</tbody>
+</table>
+</section>
+<footer>Generated from the facet shapes of <code>rust-knowledge</code> and <code>knowledge-mcp</code> by <code>rust-knowledge config-docs</code>. Output is deterministic: regenerating reproduces this file byte for byte.</footer>
+</body>
+</html>

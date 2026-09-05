@@ -9,6 +9,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod config_docs;
+
 use anyhow::Context;
 use facet::Facet;
 use figue::{self as args, DriverError};
@@ -157,6 +159,16 @@ enum Command {
         #[facet(args::positional)]
         file: PathBuf,
     },
+
+    /// Generate the HTML configuration reference page.
+    ConfigDocs {
+        /// Output file path (defaults to docs/config-reference.html).
+        #[facet(
+            args::named,
+            default = std::path::PathBuf::from("docs/config-reference.html")
+        )]
+        output: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -248,6 +260,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             json,
         } => symbol_lookup(cli, symbol, packages, *json),
         Command::Eval { file } => eval(cli, file),
+        Command::ConfigDocs { output } => config_docs::write_to(output),
     }
 }
 
