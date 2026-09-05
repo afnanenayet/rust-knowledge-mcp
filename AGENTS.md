@@ -39,8 +39,10 @@ cargo run -p knowledge-cli -- eval evals/queries.toml              # retrieval e
   nightly: integration tests run against a committed fixture workspace with
   prebuilt rustdoc artifacts.
 - The index lands in `<workspace>/.rust-knowledge/` (gitignored). `--index-dir`
-  overrides it; `RUST_KNOWLEDGE_INDEX_DIR` and `RUST_KNOWLEDGE_CARGO` are the
-  env-var equivalents.
+  overrides it. The `RUST_KNOWLEDGE_INDEX_DIR`, `RUST_KNOWLEDGE_CARGO`,
+  `RUST_KNOWLEDGE_MANIFEST_PATH` and `RUST_KNOWLEDGE_LOG` (fallback
+  `RUST_LOG`) env vars are figue's environment layer: each sits below its
+  CLI flag, which always wins.
 
 ## Architecture
 

@@ -50,25 +50,32 @@ unstable): `rustup toolchain install nightly`. Indexing with
 Every command takes `--manifest-path` and `--index-dir` (also accepted after
 the subcommand name). Both binaries define their whole argument surface with
 [facet](https://facet.rs)-derived shapes parsed by
-[figue](https://facet.rs/figue/), and `docs/config-reference.html` documents
-every command, flag, environment variable and default — generated from those
-same shapes, so it cannot drift from the parsing code. After changing any
-shape, regenerate it with `rust-knowledge config-docs` and commit the result.
+[figue](https://facet.rs/figue/), following its layered-configuration
+recipe: a flattened config root layers CLI flags over the
+`RUST_KNOWLEDGE_*` environment variables over built-in defaults,
+`FigueBuiltins` contributes `--help`/`--version`/`--completions`/
+`--html-help`/`--export-jsonschemas`, and the subcommands come from a
+facet enum.
 
-figue deviates from the old clap parser in three permissive ways (recorded
-here so nobody files them as regressions; every clap-era invocation behaves
-exactly as before, and the deviations only affect argv that clap rejected):
+The interface is figue-native — issue #2 deliberately stopped emulating the
+previous clap parser, so a few edges differ from it:
 
-- `--help`/`-h` and `--version`/`-V` are accepted after a subcommand name
-  (`rust-knowledge search --version` exits 0; clap required them at the
-  top level and exited 2).
-- An explicit help or version token anywhere in argv wins even where a
-  value was expected: `rust-knowledge --manifest-path --help` prints help
-  and exits 0, where clap exited 2 (`--help` was the missing value).
-- Hyphen-leading tokens are consumed as values where clap refused them:
-  `rust-knowledge --index-dir -h packages` runs `packages` (the `-h` is
-  the `--index-dir` value), and `search foo --package --help` filters by
-  the literal `--help` instead of exiting 2.
+- Help, version and completions print to **stdout** and exit 0. A missing
+  subcommand — or a missing positional such as `rust-knowledge search` —
+  shows the relevant help plus a corrected-command suggestion and also
+  exits 0.
+- Usage errors (unknown flags, unknown subcommands, extra positionals)
+  print figue diagnostics to **stderr** and exit 1 (the clap parser used 2).
+- `--help`/`-h`/`--version`/`-V` bind at any level, including after a
+  subcommand name.
+- figue's config-root machinery adds `--config <FILE>` (JSON) and dotted
+  `--config.<field> <VALUE>` overrides alongside the plain flags.
+
+`docs/config-reference.html` is figue's own generated HTML help
+(`figue::generate_html_help`) for the `rust-knowledge` shape — there is
+no hand-rolled rendering. After changing any shape, regenerate it with
+`rust-knowledge config-docs` and commit the result (a test pins the
+committed file). `knowledge-mcp --help` documents that binary's surface.
 
 ## MCP
 
@@ -91,12 +98,15 @@ Claude Code configuration (or Codex equivalent):
       }
     }
 
-`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir` in both binaries
-(the flag always wins); `RUST_KNOWLEDGE_CARGO` overrides the cargo binary
-used for generation. `RUST_KNOWLEDGE_LOG` (or `RUST_LOG` as fallback) sets
-the tracing filter for both binaries, and `rust-knowledge --verbose` forces
-debug logging over any environment setting. Logs go to stderr; stdout is the
-MCP channel. See `docs/config-reference.html` for the full reference.
+The environment layer sits below the CLI in both binaries (flags always
+win): `RUST_KNOWLEDGE_INDEX_DIR` replaces `--index-dir`,
+`RUST_KNOWLEDGE_MANIFEST_PATH` replaces `--manifest-path`, and
+`RUST_KNOWLEDGE_CARGO` (or `rust-knowledge --cargo`) overrides the cargo
+binary used for metadata and rustdoc generation. `RUST_KNOWLEDGE_LOG` —
+falling back to `RUST_LOG` — sets the tracing filter (`--log` and
+`rust-knowledge --verbose` override it; `-v` forces `debug`). The CLI
+logs to stdout; the MCP server logs to stderr so stdout stays the protocol
+channel. See `docs/config-reference.html` for the full reference.
 
 ## Workflow for coding agents (see AGENTS.md)
 
