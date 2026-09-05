@@ -110,7 +110,9 @@ KnowledgeRetriever trait (sync)                                                 
   tests never invoke nightly rustdoc.
 - The MCP server is wired into Claude Code via `.mcp.json` and
   `.claude/settings.local.json` (points at `target/release/knowledge-mcp`).
-- `identity_is_locatable` in `tests/universe.rs` is environment-dependent: it
-  asserts a package's manifest exists on disk at the path cargo reports, so it
-  fails when the cargo registry cache lives under a different `$HOME` than the
-  one the test runs with. It is unrelated to code changes.
+- `tests/universe.rs` parses a committed `cargo metadata` blob whose absolute
+  paths come from the machine that recorded it, so tests there must never touch
+  the filesystem; they assert derivations (e.g. an identity carries over the
+  manifest path cargo reported, and its root is the manifest's parent). The
+  on-disk locatability sweep over all packages lives in `tests/fixture.rs`
+  (`every_identity_is_locatable`), which runs against live `cargo metadata`.

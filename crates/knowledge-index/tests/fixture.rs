@@ -68,6 +68,29 @@ fn home_cargo_registry() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(".cargo/registry")
 }
 
+/// Every identity cargo metadata just reported must be locatable on this
+/// filesystem. This holds only for live metadata, so it lives here rather than
+/// in tests/universe.rs, whose committed blob carries paths from the machine
+/// that recorded it.
+#[test]
+fn every_identity_is_locatable() {
+    let u = load_universe();
+    for pkg in u.packages() {
+        let identity = u.identity(pkg);
+        assert!(
+            identity.manifest_path.is_file(),
+            "manifest for {} must exist: {}",
+            identity.display(),
+            identity.manifest_path.display()
+        );
+        assert!(
+            identity.root().is_dir(),
+            "package root for {} must exist",
+            identity.display()
+        );
+    }
+}
+
 #[test]
 fn enabled_features_come_from_the_resolve_graph() {
     let u = load_universe();

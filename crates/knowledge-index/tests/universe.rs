@@ -67,20 +67,27 @@ fn classifies_origins() {
     assert_eq!(u.origin(anyhow), Origin::Registry);
 }
 
+/// The committed metadata blob carries absolute paths captured on the machine
+/// that recorded it (a foreign `$HOME` and project layout), so identities built
+/// from it cannot be checked against this filesystem — that on-disk sweep runs
+/// against live `cargo metadata` in tests/fixture.rs instead. What a blob can
+/// pin is the derivation: the identity must carry over the manifest path cargo
+/// reported, and its root must be that manifest's parent directory.
 #[test]
-fn identity_is_locatable() {
+fn identity_preserves_the_reported_manifest_location() {
     let u = universe();
     for pkg in u.packages() {
         let identity = u.identity(pkg);
-        assert!(
-            identity.manifest_path.is_file(),
-            "manifest for {} must exist: {}",
-            identity.display(),
-            identity.manifest_path.display()
+        assert_eq!(
+            identity.manifest_path,
+            pkg.manifest_path.as_std_path(),
+            "manifest path for {} must match what cargo reported",
+            identity.display()
         );
-        assert!(
-            identity.root().is_dir(),
-            "package root for {} must exist",
+        assert_eq!(
+            identity.root(),
+            identity.manifest_path.parent().expect("manifest has a parent"),
+            "package root for {} must be the manifest's directory",
             identity.display()
         );
     }
