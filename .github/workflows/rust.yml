@@ -22,13 +22,21 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,nextest
+      # Clippy must run on nightly: the workspace lint config uses nightly-only lints (see AGENTS.md).
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal --component clippy
+      - name: Clippy
+        run: cargo +nightly clippy --all-targets --all-features -- -D warnings
       - name: Build
         run: cargo build --verbose
-      - name: Collect coverage data (including doctests)
+      - name: Run doctests
+        run: cargo test --doc
+      - name: Collect coverage data
+        env:
+          NEXTEST_PROFILE: ci
         run: |
           cargo llvm-cov --no-report nextest
-          cargo llvm-cov --no-report --doc
-          cargo llvm-cov report --doctests --lcov --output-path lcov.info
+          cargo llvm-cov report --lcov --output-path lcov.info
       - name: Publish Test Report
         id: report
         uses: mikepenz/action-junit-report@v6
