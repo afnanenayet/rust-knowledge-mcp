@@ -51,6 +51,7 @@ pub struct SearchHit {
 
 impl SearchHit {
     /// Compact one-line provenance, e.g. `tokio@1.40.0 [rustdoc_item]`.
+    #[must_use]
     pub fn provenance(&self) -> String {
         format!(
             "{}@{} [{}]",

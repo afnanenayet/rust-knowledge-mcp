@@ -1,8 +1,8 @@
 //! The resolved Cargo package universe.
 //!
-//! cargo metadata (via the maintained cargo_metadata crate) is the
+//! cargo metadata (via the maintained `cargo_metadata` crate) is the
 //! authoritative representation of the dependency universe: every package is
-//! identified by Cargo's opaque PackageId, located by its manifest path, and
+//! identified by Cargo's opaque `PackageId`, located by its manifest path, and
 //! classified by source. Nothing in this prototype ever walks the registry
 //! directory by hand.
 
@@ -18,13 +18,13 @@ use crate::error::IndexError;
 
 /// The env var that names the cargo binary the engine spawns when the
 /// frontends' `--cargo` flag is absent. Mirrors the figue env alias of
-/// [WorkspaceConfig::cargo](crate::config::WorkspaceConfig::cargo), which
+/// [`WorkspaceConfig::cargo`](crate::config::WorkspaceConfig::cargo), which
 /// sits above it in the layering.
 pub const CARGO_ENV_VAR: &str = "RUST_KNOWLEDGE_CARGO";
 
 /// Resolves which cargo binary a spawn invokes: an explicit binary (the
-/// frontends' `--cargo` flag, already merged with [CARGO_ENV_VAR] by
-/// figue) beats a raw [CARGO_ENV_VAR] from the environment, which beats
+/// frontends' `--cargo` flag, already merged with [`CARGO_ENV_VAR`] by
+/// figue) beats a raw [`CARGO_ENV_VAR`] from the environment, which beats
 /// plain `cargo` on `$PATH`. Returns the binary to invoke, or None for
 /// `cargo` from `$PATH`.
 ///
@@ -73,27 +73,22 @@ pub fn resolve_cargo(explicit: Option<&Path>, env_cargo: Option<String>) -> Opti
 /// so a relative value would resolve differently per spawn. Fails
 /// soft (returns the input) if the path cannot be made absolute.
 fn absolute_bin(cargo: &str) -> String {
-    std::path::absolute(cargo)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| cargo.to_owned())
+    std::path::absolute(cargo).map_or_else(|_| cargo.to_owned(), |p| p.to_string_lossy().into_owned())
 }
 
-/// Reads [CARGO_ENV_VAR] the way [resolve_cargo] expects it. figue's env
+/// Reads [`CARGO_ENV_VAR`] the way [`resolve_cargo`] expects it. figue's env
 /// layer has already merged the variable into the frontends' `--cargo`
 /// flag when it applies, so this read serves callers below that layer
 /// (and is idempotent under it). A value that is not valid UTF-8 cannot
 /// become a CLI-layer string, so it warns and yields None — the same
-/// loud fall-to-$PATH contract [resolve_cargo] applies to an empty
+/// loud fall-to-$PATH contract [`resolve_cargo`] applies to an empty
 /// value, instead of the silent one `std::env::var(...).ok()` gives
-/// (its NotUnicode error would vanish).
+/// (its `NotUnicode` error would vanish).
 pub(crate) fn cargo_env_value() -> Option<String> {
     match std::env::var_os(CARGO_ENV_VAR) {
-        Some(value) => match value.to_str() {
-            Some(text) => Some(text.to_owned()),
-            None => {
-                warn!("${CARGO_ENV_VAR} is not valid UTF-8; using cargo from $PATH");
-                None
-            }
+        Some(value) => if let Some(text) = value.to_str() { Some(text.to_owned()) } else {
+            warn!("${CARGO_ENV_VAR} is not valid UTF-8; using cargo from $PATH");
+            None
         },
         None => None,
     }
@@ -113,6 +108,7 @@ pub enum Origin {
 }
 
 impl Origin {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Origin::Workspace => "workspace",
@@ -128,19 +124,19 @@ pub struct CargoUniverse {
     metadata: Metadata,
     /// Cargo's opaque package id to index into metadata.packages.
     by_id: HashMap<PackageId, usize>,
-    /// Workspace member ids (metadata.workspace_members).
+    /// Workspace member ids (`metadata.workspace_members`).
     member_ids: Vec<PackageId>,
 }
 
 impl CargoUniverse {
     /// Runs cargo metadata for the given manifest (or the current
-    /// directory's ancestor workspace when manifest_path is None).
+    /// directory's ancestor workspace when `manifest_path` is None).
     pub fn load(manifest_path: Option<&Path>) -> Result<Self, IndexError> {
         Self::load_with(manifest_path, None)
     }
 
     /// Like [load](Self::load), with an explicit cargo binary. A None
-    /// cargo falls back to $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
+    /// cargo falls back to $`RUST_KNOWLEDGE_CARGO`, then to cargo on $PATH.
     pub fn load_with(
         manifest_path: Option<&Path>,
         cargo: Option<&Path>,
@@ -207,21 +203,25 @@ impl CargoUniverse {
         self.metadata.packages.iter()
     }
 
+    #[must_use]
     pub fn package_count(&self) -> usize {
         self.metadata.packages.len()
     }
 
     /// Workspace root directory.
+    #[must_use]
     pub fn workspace_root(&self) -> &Path {
         self.metadata.workspace_root.as_std_path()
     }
 
     /// Workspace target directory.
+    #[must_use]
     pub fn target_directory(&self) -> &Path {
         self.metadata.target_directory.as_std_path()
     }
 
     /// Looks a package up by Cargo's opaque id.
+    #[must_use]
     pub fn get(&self, id: &PackageId) -> Option<&Package> {
         self.by_id
             .get(id)
@@ -268,6 +268,7 @@ impl CargoUniverse {
     }
 
     /// All versions of a package name present in the resolved graph.
+    #[must_use]
     pub fn versions_of(&self, name: &str) -> Vec<&Package> {
         let mut found: Vec<&Package> = self
             .packages()
@@ -281,11 +282,13 @@ impl CargoUniverse {
         self.member_ids.iter().filter_map(|id| self.get(id))
     }
 
+    #[must_use]
     pub fn is_workspace_member(&self, id: &PackageId) -> bool {
         self.member_ids.contains(id)
     }
 
     /// Classifies how the package entered the graph.
+    #[must_use]
     pub fn origin(&self, pkg: &Package) -> Origin {
         if self.is_workspace_member(&pkg.id) {
             return Origin::Workspace;
@@ -298,12 +301,14 @@ impl CargoUniverse {
     }
 
     /// The normalized identity of a package.
+    #[must_use]
     pub fn identity(&self, pkg: &Package) -> PackageIdentity {
         identity_from_package(pkg)
     }
 
     /// Resolved-graph node for a package: direct dependencies (with rename
     /// info) and enabled features, or None when cargo ran with --no-deps.
+    #[must_use]
     pub fn node(&self, id: &PackageId) -> Option<&cargo_metadata::Node> {
         self.metadata
             .resolve
@@ -316,13 +321,15 @@ impl CargoUniverse {
     /// Enabled features of a package in this graph (resolved view). Empty
     /// when the metadata carries no resolve graph (cargo ran with
     /// --no-deps), which is indistinguishable from zero enabled features.
+    #[must_use]
     pub fn enabled_features(&self, id: &PackageId) -> Vec<String> {
         self.node(id)
-            .map(|n| n.features.iter().map(|f| f.to_string()).collect())
+            .map(|n| n.features.iter().map(std::string::ToString::to_string).collect())
             .unwrap_or_default()
     }
 
     /// SHA-256 of the workspace Cargo.lock, for index metadata.
+    #[must_use]
     pub fn lock_hash(&self) -> String {
         hash_file(
             self.metadata
@@ -335,11 +342,12 @@ impl CargoUniverse {
     /// Stable fingerprint of the resolved universe itself: package ids and
     /// workspace root. Two fingerprints match only if the same universe was
     /// resolved.
+    #[must_use]
     pub fn fingerprint(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.metadata.workspace_root.as_str().as_bytes());
         let mut ids: Vec<&str> = self.packages().map(|p| p.id.repr.as_str()).collect();
-        ids.sort();
+        ids.sort_unstable();
         for id in ids {
             hasher.update(id.as_bytes());
             hasher.update([0x1f]);
@@ -349,6 +357,7 @@ impl CargoUniverse {
     }
 
     /// Path of the workspace Cargo.lock, if present.
+    #[must_use]
     pub fn lock_path(&self) -> PathBuf {
         self.metadata
             .workspace_root
@@ -357,7 +366,8 @@ impl CargoUniverse {
     }
 }
 
-/// Converts a cargo_metadata package into the normalized identity.
+/// Converts a `cargo_metadata` package into the normalized identity.
+#[must_use]
 pub fn identity_from_package(pkg: &Package) -> PackageIdentity {
     PackageIdentity {
         package_id: pkg.id.repr.clone(),

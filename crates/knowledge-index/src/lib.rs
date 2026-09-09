@@ -6,10 +6,10 @@
 //! * [config] - shared, facet-derived configuration types parsed by figue.
 //! * [error] - typed errors with package/command/path context.
 //! * [rustdoc] - rustdoc JSON generation (behind a provider interface) and
-//!   normalization into [knowledge_core::KnowledgeDocument]s.
+//!   normalization into [`knowledge_core::KnowledgeDocument`]s.
 //! * [markdown] - README/docs/*.md discovery and structural chunking.
 //! * [corpus] - assembles the full normalized corpus for a workspace.
-//! * [tantivy_index] - schema, index build, and the [KnowledgeRetriever]
+//! * [`tantivy_index`] - schema, index build, and the [`KnowledgeRetriever`]
 //!   implementation.
 //! * [store] - persistent index layout and metadata.
 //! * [pipeline] - the end-to-end index command used by CLI and tests.

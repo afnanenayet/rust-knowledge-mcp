@@ -1,7 +1,7 @@
 //! Persistent index layout and metadata.
 //!
 //! <index-dir>/
-//! ├── index-meta.json      provenance & fingerprint (see IndexMeta)
+//! ├── index-meta.json      provenance & fingerprint (see `IndexMeta`)
 //! ├── tantivy/             the lexical index
 //! ├── corpus.jsonl         normalized documents (inspectability)
 //! └── cache/rustdoc/       versioned rustdoc JSON artifacts
@@ -46,6 +46,7 @@ pub struct IndexMeta {
 }
 
 impl IndexMeta {
+    #[must_use]
     pub fn schema_version(&self) -> u32 {
         self.schema_version
     }
@@ -75,18 +76,22 @@ impl IndexMeta {
     }
 
     /// The tantivy index directory inside an index dir.
+    #[must_use]
     pub fn tantivy_dir(index_dir: &Path) -> PathBuf {
         index_dir.join(TANTIVY_DIR)
     }
 
+    #[must_use]
     pub fn corpus_path(index_dir: &Path) -> PathBuf {
         index_dir.join(CORPUS_FILE)
     }
 
+    #[must_use]
     pub fn meta_path(index_dir: &Path) -> PathBuf {
         index_dir.join(META_FILE)
     }
 
+    #[must_use]
     pub fn supported_schema() -> u32 {
         INDEX_SCHEMA_VERSION
     }

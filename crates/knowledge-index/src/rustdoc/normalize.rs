@@ -1,8 +1,8 @@
-//! Normalizing a parsed rustdoc JSON artifact into KnowledgeDocuments.
+//! Normalizing a parsed rustdoc JSON artifact into `KnowledgeDocuments`.
 //!
 //! Walks the local crate from the root module, keeping the fully qualified
 //! path of every public item. Item documentation stays attached to its
-//! symbol; the crate-level and module docs become RustdocModule documents.
+//! symbol; the crate-level and module docs become `RustdocModule` documents.
 //! Derive-generated/synthetic impls and impls of foreign traits are skipped
 //! as compiler noise; trait items and local-trait impl methods are kept.
 
@@ -108,11 +108,11 @@ fn crate_name_for(package: &PackageIdentity) -> String {
     package.name.replace('-', "_")
 }
 
-/// Scans the flat top-level "format_version" number out of the raw JSON
+/// Scans the flat top-level "`format_version`" number out of the raw JSON
 /// without parsing the whole document (deeply nested crates can exceed
 /// serde's recursion limit even for probe parses). The real field is the
 /// last top-level key and is colon-adjacent; occurrences inside documented
-/// text (this crate's own docs mention format_version!) are escaped and
+/// text (this crate's own docs mention `format_version`!) are escaped and
 /// lack the colon, so scanning from the end avoids them.
 fn extract_format_version(raw: &str) -> u32 {
     let needle = "\"format_version\":";
@@ -123,7 +123,7 @@ fn extract_format_version(raw: &str) -> u32 {
     let digits: String = after
         .chars()
         .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect();
     if digits.is_empty() {
         return 0;
@@ -174,7 +174,7 @@ struct Walker<'a> {
     docs: Vec<KnowledgeDocument>,
 }
 
-impl<'a> Walker<'a> {
+impl Walker<'_> {
     fn walk_item(&mut self, id: Id, path: String, ctx: Context) {
         let Some(item) = self.krate.index.get(&id) else {
             return;
@@ -424,7 +424,7 @@ impl<'a> Walker<'a> {
             source_kind,
             title: title.to_string(),
             symbol_path: Some(path.to_string()),
-            item_kind: item_kind.map(|k| k.to_string()),
+            item_kind: item_kind.map(std::string::ToString::to_string),
             section_path: Vec::new(),
             text: item.docs.clone().unwrap_or_default(),
             source_path,

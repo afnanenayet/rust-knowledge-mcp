@@ -1,12 +1,12 @@
-//! The Tantivy-backed [KnowledgeRetriever].
+//! The Tantivy-backed [`KnowledgeRetriever`].
 //!
 //! Query construction, in one place:
-//! * free text: QueryParser over boosted fields (symbol_path 10, title 5,
-//!   signature 3, section_text 3, package_name 2.5, related_text 1.5, body 1);
-//! * identifier-shaped tokens (CamelCase, snake_case, ::-paths) additionally
-//!   produce raw term queries on symbol_exact (boost 30) and symbol_last
+//! * free text: `QueryParser` over boosted fields (`symbol_path` 10, title 5,
+//!   signature 3, `section_text` 3, `package_name` 2.5, `related_text` 1.5, body 1);
+//! * identifier-shaped tokens (CamelCase, `snake_case`, `::-paths`) additionally
+//!   produce raw term queries on `symbol_exact` (boost 30) and `symbol_last`
 //!   (boost 12/8), so exact symbol matches dominate identifier queries;
-//! * filters (packages, source kinds, item kinds) are BooleanQuery MUST
+//! * filters (packages, source kinds, item kinds) are `BooleanQuery` MUST
 //!   clauses; no Tantivy query syntax is ever exposed to callers.
 
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ pub struct TantivyRetriever {
 }
 
 impl TantivyRetriever {
-    /// Opens an existing index (built by build_index / index_workspace).
+    /// Opens an existing index (built by `build_index` / `index_workspace`).
     pub fn open(index_dir: &Path) -> Result<Self> {
         let meta_path = IndexMeta::meta_path(index_dir);
         let meta = IndexMeta::load(&meta_path).map_err(|e| match e {
@@ -74,6 +74,7 @@ impl TantivyRetriever {
         })
     }
 
+    #[must_use]
     pub fn meta(&self) -> &IndexMeta {
         &self.meta
     }
@@ -555,9 +556,7 @@ impl KnowledgeRetriever for TantivyRetriever {
                 kind: doc
                     .get_first(self.fields.item_kind)
                     .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| "module".to_string()),
+                    .filter(|s| !s.is_empty()).map_or_else(|| "module".to_string(), str::to_string),
                 symbol_path,
                 signature: doc
                     .get_first(self.fields.signature)

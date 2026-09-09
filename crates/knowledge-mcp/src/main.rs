@@ -7,9 +7,9 @@
 //!   "args": ["--manifest-path", "/path/to/workspace/Cargo.toml"]}}}
 //!
 //! Arguments are parsed by figue over a facet shape (issue #2): the
-//! flattened config root layers CLI flags over the RUST_KNOWLEDGE_* env
+//! flattened config root layers CLI flags over the `RUST_KNOWLEDGE`_* env
 //! vars over defaults with figue's own precedence, and
-//! figue::FigueBuiltins contributes --help/--version and friends.
+//! `figue::FigueBuiltins` contributes --help/--version and friends.
 //! `--cargo` is honored on the cargo metadata run that locates the
 //! workspace when `--index-dir` is absent (the documented deployment
 //! passes only `--manifest-path`, so that run is the common case).

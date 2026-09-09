@@ -1,9 +1,9 @@
 //! CLI entry point for the `rust-knowledge` binary.
 //!
 //! The argument surface follows the figue recipes (issue #2): a flattened
-//! figue config root over [WorkspaceConfig] layers CLI flags over the
-//! RUST_KNOWLEDGE_* environment variables over defaults with figue's own
-//! precedence; [figue::FigueBuiltins] contributes --help/--version and
+//! figue config root over [`WorkspaceConfig`] layers CLI flags over the
+//! `RUST_KNOWLEDGE`_* environment variables over defaults with figue's own
+//! precedence; [`figue::FigueBuiltins`] contributes --help/--version and
 //! friends; subcommands come from `#[facet(args::subcommand)]`; and
 //! help/version/diagnostics with their exit codes are figue's own
 //! (`DriverOutcome::unwrap`), not emulated. The generated HTML reference
@@ -28,7 +28,7 @@ const ABOUT: &str = "Search documentation of the resolved Cargo dependency unive
 /// Command-line surface of `rust-knowledge`.
 #[derive(Facet, Debug)]
 struct Cli {
-    /// Workspace knobs, layered by figue: flags beat $RUST_KNOWLEDGE_* env
+    /// Workspace knobs, layered by figue: flags beat $`RUST_KNOWLEDGE`_* env
     /// vars, which beat defaults.
     #[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]
     config: WorkspaceConfig,
@@ -105,8 +105,8 @@ enum Command {
         #[facet(args::named, default)]
         package: Vec<String>,
 
-        /// Restrict to source kinds (rustdoc_item, rustdoc_module,
-        /// crate_readme, markdown_document). Repeatable.
+        /// Restrict to source kinds (`rustdoc_item`, `rustdoc_module`,
+        /// `crate_readme`, `markdown_document`). Repeatable.
         #[facet(args::named, default)]
         source_kind: Vec<String>,
 
@@ -136,8 +136,8 @@ enum Command {
 
     /// Look up a symbol by (partial) path.
     Symbol {
-        /// Symbol path or last segment, e.g. demo_core::writer::Writer::flush
-        /// or spawn_blocking.
+        /// Symbol path or last segment, e.g. `demo_core::writer::Writer::flush`
+        /// or `spawn_blocking`.
         #[facet(args::positional)]
         symbol: String,
 
@@ -600,9 +600,7 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
     for outcome in &outcomes {
         let status = if outcome.passed() { "PASS" } else { "FAIL" };
         let rank = outcome
-            .rank
-            .map(|r| r.to_string())
-            .unwrap_or_else(|| "-".to_string());
+            .rank.map_or_else(|| "-".to_string(), |r| r.to_string());
         println!(
             "{status} rank {rank:>2} {:>16} {:?}",
             outcome.case.category, outcome.case.text

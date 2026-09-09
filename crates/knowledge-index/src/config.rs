@@ -1,7 +1,7 @@
 //! Shared, facet-derived configuration for the `rust-knowledge` frontends.
 //!
 //! Both binaries declare a *flattened figue config root* over
-//! [WorkspaceConfig] (`#[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]`),
+//! [`WorkspaceConfig`] (`#[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]`),
 //! following figue's layered-configuration recipe: the root's fields stay
 //! ordinary top-level flags (`--manifest-path`, `--index-dir`, ...) while
 //! figue's env layer addresses them through the exact-name aliases declared
@@ -39,16 +39,16 @@ pub struct WorkspaceConfig {
     pub manifest_path: Option<PathBuf>,
 
     /// Directory for the knowledge index. Defaults to
-    /// <workspace>/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.
+    /// <workspace>/.rust-knowledge or $`RUST_KNOWLEDGE_INDEX_DIR`.
     #[facet(args::named, args::env_alias = "RUST_KNOWLEDGE_INDEX_DIR")]
     pub index_dir: Option<PathBuf>,
 
     /// Explicit cargo binary for metadata/rustdoc invocations. Defaults to
-    /// $RUST_KNOWLEDGE_CARGO, or cargo on $PATH.
+    /// $`RUST_KNOWLEDGE_CARGO`, or cargo on $PATH.
     #[facet(args::named, args::env_alias = "RUST_KNOWLEDGE_CARGO")]
     pub cargo: Option<PathBuf>,
 
-    /// Tracing env-filter (e.g. "info", "demo_core=debug"). -v overrides
+    /// Tracing env-filter (e.g. "info", "`demo_core=debug`"). -v overrides
     /// it with "debug".
     #[facet(
         args::named,
@@ -68,6 +68,7 @@ impl WorkspaceConfig {
     /// `EnvFilter::try_new` where the subscriber is initialized —
     /// `EnvFilter::new` silently ignores invalid directives, which would
     /// degrade logging to ERROR-only with no diagnostic.
+    #[must_use]
     pub fn log_filter(&self, verbose: bool) -> String {
         if verbose {
             "debug".to_string()
@@ -78,7 +79,8 @@ impl WorkspaceConfig {
 
     /// The index directory for a resolved workspace root: an explicit
     /// `--index-dir` wins; otherwise the workspace default,
-    /// `<root>/.rust-knowledge` ([crate::pipeline::default_index_dir]).
+    /// `<root>/.rust-knowledge` ([`crate::pipeline::default_index_dir`]).
+    #[must_use]
     pub fn resolve_index_dir(&self, workspace_root: &Path) -> PathBuf {
         self.index_dir
             .clone()
@@ -91,16 +93,16 @@ impl WorkspaceConfig {
 ///
 /// An argument that is not valid UTF-8 cannot be represented in figue's
 /// CLI layer (String values), so the parse fails hard with a diagnostic
-/// on stderr and a [DriverError::Failed] outcome (exit 1 via
+/// on stderr and a [`DriverError::Failed`] outcome (exit 1 via
 /// `DriverOutcome::unwrap`) — it is neither skipped nor panicked on
 /// (`std::env::args` would panic): skipping an entry mid-argv re-binds
 /// the surrounding flags (the next token would become the previous
 /// flag's value), silently misparsing the rest of argv.
 ///
 /// `program_name`, `version` and `description` drive figue's --help /
-/// --version output. The returned [DriverOutcome] carries figue's own
+/// --version output. The returned [`DriverOutcome`] carries figue's own
 /// help/version/diagnostics handling (see the figue recipes: match
-/// [DriverError] variants, or call `unwrap()` for figue's native
+/// [`DriverError`] variants, or call `unwrap()` for figue's native
 /// print-and-exit behavior).
 pub fn parse_std_args<T: Facet<'static>>(
     program_name: &str,
@@ -127,7 +129,7 @@ pub fn parse_std_args<T: Facet<'static>>(
 }
 
 /// Splits arguments into the UTF-8-parseable ones and a count of the
-/// rest; a non-zero count is a hard parse failure in [parse_std_args]
+/// rest; a non-zero count is a hard parse failure in [`parse_std_args`]
 /// (figue parses String CLI values only).
 fn utf8_argv<I: Iterator<Item = std::ffi::OsString>>(args: I) -> (Vec<String>, usize) {
     let mut argv = Vec::new();
@@ -141,9 +143,9 @@ fn utf8_argv<I: Iterator<Item = std::ffi::OsString>>(args: I) -> (Vec<String>, u
     (argv, skipped)
 }
 
-/// [parse_std_args] over an explicit argv and environment, for tests.
+/// [`parse_std_args`] over an explicit argv and environment, for tests.
 ///
-/// `env` is figue's [MockEnv] (figue's public env-layer source type;
+/// `env` is figue's [`MockEnv`] (figue's public env-layer source type;
 /// `std::env::var` cannot be swapped out in-process), so this is the
 /// cross-crate test seam for the frontends' parse plumbing.
 pub fn parse_args_with<T: Facet<'static>>(

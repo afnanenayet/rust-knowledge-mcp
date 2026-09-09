@@ -14,7 +14,7 @@ use crate::error::IndexError;
 use crate::store::IndexMeta;
 pub use retriever::TantivyRetriever;
 
-/// Builds (or rebuilds) the index at index_dir from a corpus.
+/// Builds (or rebuilds) the index at `index_dir` from a corpus.
 pub fn build_index(
     index_dir: &Path,
     documents: &[knowledge_core::KnowledgeDocument],

@@ -23,6 +23,7 @@ pub enum RustdocScope {
 }
 
 impl RustdocScope {
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "workspace" => Some(RustdocScope::Workspace),
@@ -93,12 +94,11 @@ pub fn build_corpus(
             spec: spec.clone(),
             reason: reason.clone(),
         });
-    } else {
-        for (spec, reason) in &generated.skipped {
-            warn!(package = %spec, reason = %reason, "skipped rustdoc generation");
-        }
-        report.skipped = generated.skipped.clone();
     }
+    for (spec, reason) in &generated.skipped {
+        warn!(package = %spec, reason = %reason, "skipped rustdoc generation");
+    }
+    report.skipped = generated.skipped.clone();
     for spec in &generated.unsupported {
         info!(package = %spec, "package has no lib target; indexing markdown only");
     }

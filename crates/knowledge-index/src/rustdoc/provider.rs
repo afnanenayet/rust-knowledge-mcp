@@ -58,13 +58,14 @@ pub struct GeneratedRustdocProvider {
     /// Toolchain passed to cargo (e.g. "nightly"); None = plain cargo.
     toolchain: Option<String>,
     /// Cargo binary resolved once at construction via
-    /// [crate::cargo::resolve_cargo] (explicit `--cargo` beats
-    /// $RUST_KNOWLEDGE_CARGO, which beats cargo on $PATH); None means
+    /// [`crate::cargo::resolve_cargo`] (explicit `--cargo` beats
+    /// $`RUST_KNOWLEDGE_CARGO`, which beats cargo on $PATH); None means
     /// plain `cargo` from $PATH.
     cargo: Option<String>,
 }
 
 impl GeneratedRustdocProvider {
+    #[must_use]
     pub fn new(
         universe: &CargoUniverse,
         artifact_dir: PathBuf,
@@ -80,11 +81,11 @@ impl GeneratedRustdocProvider {
         )
     }
 
-    /// [new] with the [crate::cargo::CARGO_ENV_VAR] value supplied by the
+    /// [new] with the [`crate::cargo::CARGO_ENV_VAR`] value supplied by the
     /// caller. The process environment cannot be swapped in-process (and
     /// mutating it would race other tests), so this is the seam that lets
     /// tests pin the constructor's resolution — the same
-    /// [crate::cargo::resolve_cargo] precedence the metadata spawn
+    /// [`crate::cargo::resolve_cargo`] precedence the metadata spawn
     /// applies: explicit `--cargo` over the env var over $PATH.
     fn new_with_env(
         universe: &CargoUniverse,
@@ -104,7 +105,7 @@ impl GeneratedRustdocProvider {
     }
 
     /// The cargo invocation prefix. An explicit cargo binary (resolved by
-    /// the constructor from --cargo or $RUST_KNOWLEDGE_CARGO) replaces
+    /// the constructor from --cargo or $`RUST_KNOWLEDGE_CARGO`) replaces
     /// the PATH lookup (and suppresses the +toolchain argument: the
     /// caller controls the toolchain, including the rustdoc on PATH).
     fn cargo_argv(&self) -> Vec<String> {
@@ -295,6 +296,7 @@ fn stderr_tail(stderr: &[u8], max: usize) -> String {
 // manifest_path is retained for diagnostics in future work; keep the field
 // exercised to avoid dead-code warnings.
 impl GeneratedRustdocProvider {
+    #[must_use]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
     }

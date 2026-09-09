@@ -24,7 +24,7 @@ pub struct IndexOptions {
     /// Skip rustdoc entirely (metadata + markdown only).
     pub skip_rustdoc: bool,
     /// Explicit cargo binary (frontends' config layer). None falls back to
-    /// $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
+    /// $`RUST_KNOWLEDGE_CARGO`, then to cargo on $PATH.
     pub cargo: Option<PathBuf>,
 }
 
@@ -48,6 +48,7 @@ pub struct IndexOutcome {
 }
 
 /// Default index directory for a workspace root.
+#[must_use]
 pub fn default_index_dir(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".rust-knowledge")
 }
@@ -59,9 +60,7 @@ pub fn index_workspace(
     options: &IndexOptions,
 ) -> Result<IndexOutcome, IndexError> {
     let universe = CargoUniverse::load_with(manifest_path, options.cargo.as_deref())?;
-    let index_dir = index_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_index_dir(universe.workspace_root()));
+    let index_dir = index_dir.map_or_else(|| default_index_dir(universe.workspace_root()), Path::to_path_buf);
 
     let scope = if options.skip_rustdoc {
         RustdocScope::None
@@ -122,19 +121,16 @@ pub fn index_workspace(
 /// When `index_dir` is absent, a `cargo metadata` run discovers the
 /// workspace. Both frontends pass their resolved `--cargo` binary here,
 /// so every path that spawns cargo honors the flag (see
-/// [CargoUniverse::load_with] for the explicit-beats-env-beats-$PATH
+/// [`CargoUniverse::load_with`] for the explicit-beats-env-beats-$PATH
 /// fallback chain).
 pub fn open_retriever_with(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
     cargo: Option<&Path>,
 ) -> Result<TantivyRetriever, IndexError> {
-    let index_dir = match index_dir {
-        Some(dir) => dir.to_path_buf(),
-        None => {
-            let universe = CargoUniverse::load_with(manifest_path, cargo)?;
-            default_index_dir(universe.workspace_root())
-        }
+    let index_dir = if let Some(dir) = index_dir { dir.to_path_buf() } else {
+        let universe = CargoUniverse::load_with(manifest_path, cargo)?;
+        default_index_dir(universe.workspace_root())
     };
     TantivyRetriever::open(&index_dir).map_err(IndexError::from)
 }
@@ -143,8 +139,7 @@ fn now_rfc3339() -> String {
     // std-only approximation; the timestamp is informational only.
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     format!("{seconds}")
 }
 

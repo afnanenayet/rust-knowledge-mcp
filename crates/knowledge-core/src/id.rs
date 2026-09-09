@@ -18,6 +18,7 @@ pub struct DocumentId(String);
 
 impl DocumentId {
     /// Derives an id from ordered identity parts.
+    #[must_use]
     pub fn from_identity(parts: &[&str]) -> Self {
         let mut hasher = Sha256::new();
         for (i, part) in parts.iter().enumerate() {
@@ -36,6 +37,7 @@ impl DocumentId {
         DocumentId(hex)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

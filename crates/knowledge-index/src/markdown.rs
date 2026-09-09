@@ -280,7 +280,7 @@ impl Chunker<'_> {
     }
 
     /// Appends text, splitting the chunk at this boundary if it would
-    /// overflow MAX_CHUNK_CHARS.
+    /// overflow `MAX_CHUNK_CHARS`.
     fn append_with_split(&mut self, text: &str) {
         self.split_if_full(text.len());
         self.buf.push_str(text);
