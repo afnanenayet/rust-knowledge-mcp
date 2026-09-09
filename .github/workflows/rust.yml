@@ -8,9 +8,9 @@ on:
 
 # Mostly required so we can publish annotations for tests
 permissions:
-    contents: read
-    checks: write
-    id-token: write
+  contents: read
+  checks: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -48,6 +48,12 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/nextest/ci/junit.xml
       - name: Publish Test Report
         id: report
         uses: mikepenz/action-junit-report@v6
