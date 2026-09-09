@@ -112,19 +112,57 @@ pub fn index_workspace(
     })
 }
 
+/// Where a served index lives, plus the workspace context resolution had.
+#[derive(Clone, Debug)]
+pub struct ResolvedIndex {
+    /// The index directory to open.
+    pub index_dir: PathBuf,
+    /// Workspace root as reported by cargo metadata, when it ran. `None`
+    /// when an explicit index dir made cargo metadata unnecessary.
+    pub workspace_root: Option<PathBuf>,
+}
+
+impl ResolvedIndex {
+    /// Opens the resolved index directory — resolve-to-open in one step,
+    /// without re-running resolution.
+    pub fn open(&self) -> Result<TantivyRetriever, IndexError> {
+        TantivyRetriever::open(&self.index_dir).map_err(IndexError::from)
+    }
+}
+
+/// Resolves which index directory to serve, without opening it.
+///
+/// Precedence mirrors [open_retriever]: an explicit `index_dir` wins and
+/// never runs cargo (the caller's working directory is irrelevant in that
+/// case); otherwise cargo metadata resolves the workspace — from
+/// `manifest_path` when given — and the index defaults to
+/// `<workspace_root>/.rust-knowledge`.
+pub fn resolve_index(
+    manifest_path: Option<&Path>,
+    index_dir: Option<&Path>,
+) -> Result<ResolvedIndex, IndexError> {
+    match index_dir {
+        Some(dir) => Ok(ResolvedIndex {
+            index_dir: dir.to_path_buf(),
+            workspace_root: None,
+        }),
+        None => {
+            let universe = CargoUniverse::load(manifest_path)?;
+            let workspace_root = universe.workspace_root().to_path_buf();
+            Ok(ResolvedIndex {
+                index_dir: default_index_dir(&workspace_root),
+                workspace_root: Some(workspace_root),
+            })
+        }
+    }
+}
+
 /// Opens the index at the given directory, or the workspace default.
 pub fn open_retriever(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
 ) -> Result<TantivyRetriever, IndexError> {
-    let index_dir = match index_dir {
-        Some(dir) => dir.to_path_buf(),
-        None => {
-            let universe = CargoUniverse::load(manifest_path)?;
-            default_index_dir(universe.workspace_root())
-        }
-    };
-    TantivyRetriever::open(&index_dir).map_err(IndexError::from)
+    resolve_index(manifest_path, index_dir)?.open()
 }
 
 fn now_rfc3339() -> String {
