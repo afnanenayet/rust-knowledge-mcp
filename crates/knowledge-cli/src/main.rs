@@ -7,6 +7,7 @@ use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
+use knowledge_index::telemetry::TelemetryOptions;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -137,11 +138,12 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(if cli.verbose { "debug" } else { "info" })
-        .with_target(false)
-        .compact()
-        .init();
+    // Shared layered tracing init: logs go to stderr (stdout carries the
+    // data output of --json modes); -v bumps the built-in default filter,
+    // RUST_KNOWLEDGE_LOG / RUST_LOG still win over it.
+    knowledge_index::telemetry::init(&TelemetryOptions {
+        verbose: cli.verbose,
+    });
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
+use knowledge_index::telemetry::TelemetryOptions;
 use knowledge_mcp::KnowledgeServer;
 use rmcp::service::serve_server;
 use rmcp::transport::stdio;
@@ -32,13 +33,10 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    // MCP speaks JSON-RPC on stdout; everything else must go to stderr.
-    tracing_subscriber::fmt()
-        .with_env_filter(std::env::var("RUST_KNOWLEDGE_LOG").unwrap_or_else(|_| "info".into()))
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .compact()
-        .init();
+    // MCP speaks JSON-RPC on stdout; the shared layered init writes every
+    // log to stderr, so stdout stays structurally pristine. The filter comes
+    // from RUST_KNOWLEDGE_LOG -> RUST_LOG -> the built-in default.
+    knowledge_index::telemetry::init(&TelemetryOptions::default());
 
     let cli = Cli::parse();
     let index_dir = cli.index_dir.or_else(|| {

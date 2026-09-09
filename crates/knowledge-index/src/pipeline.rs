@@ -54,6 +54,7 @@ pub fn index_workspace(
     index_dir: Option<&Path>,
     options: &IndexOptions,
 ) -> Result<IndexOutcome, IndexError> {
+    let start = std::time::Instant::now();
     let universe = CargoUniverse::load(manifest_path)?;
     let index_dir = index_dir
         .map(Path::to_path_buf)
@@ -102,6 +103,7 @@ pub fn index_workspace(
     info!(
         index_dir = %index_dir.display(),
         documents = documents.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
         "indexing complete"
     );
 

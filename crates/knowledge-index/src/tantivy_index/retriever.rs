@@ -20,7 +20,7 @@ use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, TantivyDocument, Term};
-use tracing::{info, info_span};
+use tracing::{debug_span, info};
 
 use crate::error::IndexError;
 use crate::store::IndexMeta;
@@ -86,6 +86,25 @@ impl TantivyRetriever {
 
     fn searcher(&self) -> tantivy::Searcher {
         self.reader.searcher()
+    }
+
+    /// Fetches one document by exact id; the trait method [Self::get]
+    /// wraps this in the request span and timing.
+    fn document_by_id(&self, id: &DocumentId) -> Result<KnowledgeDocument> {
+        let searcher = self.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.fields.id, id.as_str()),
+            IndexRecordOption::Basic,
+        );
+        let top = searcher
+            .search(&query, &TopDocs::with_limit(1).order_by_score())
+            .map_err(KnowledgeError::engine)?;
+        let (_, addr) = top
+            .first()
+            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))?;
+        let doc: TantivyDocument = searcher.doc(*addr).map_err(KnowledgeError::engine)?;
+        from_tantivy_doc(&self.fields, &doc)
+            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))
     }
 
     fn query_parser(&self, fields: &[Field]) -> QueryParser {
@@ -369,7 +388,9 @@ impl TantivyRetriever {
 
 impl KnowledgeRetriever for TantivyRetriever {
     fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
-        let span = info_span!("search", query = %query.text);
+        // Query text is user input and lives at debug level only; counts and
+        // timings are safe at info (level policy, docs/observability.md).
+        let span = debug_span!("search", query = %query.text);
         let _enter = span.enter();
         let start = std::time::Instant::now();
 
@@ -399,25 +420,25 @@ impl KnowledgeRetriever for TantivyRetriever {
     }
 
     fn get(&self, id: &DocumentId) -> Result<KnowledgeDocument> {
-        let searcher = self.searcher();
-        let query = TermQuery::new(
-            Term::from_field_text(self.fields.id, id.as_str()),
-            IndexRecordOption::Basic,
+        // Document ids are content hashes, never user text: safe at debug.
+        let span = debug_span!("doc_get", id = %id.as_str());
+        let _enter = span.enter();
+        let start = std::time::Instant::now();
+
+        let document = self.document_by_id(id)?;
+        info!(
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "document retrieved"
         );
-        let top = searcher
-            .search(&query, &TopDocs::with_limit(1).order_by_score())
-            .map_err(KnowledgeError::engine)?;
-        let (_, addr) = top
-            .first()
-            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))?;
-        let doc: TantivyDocument = searcher.doc(*addr).map_err(KnowledgeError::engine)?;
-        from_tantivy_doc(&self.fields, &doc)
-            .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))
+        Ok(document)
     }
 
     fn symbol_lookup(&self, query: &SymbolQuery) -> Result<Vec<SymbolInfo>> {
-        let span = info_span!("symbol_lookup", symbol = %query.symbol);
+        // The symbol is user input and lives at debug level only; counts and
+        // timings are safe at info.
+        let span = debug_span!("symbol_lookup", symbol = %query.symbol);
         let _enter = span.enter();
+        let start = std::time::Instant::now();
 
         let symbol = query.symbol.trim().to_lowercase();
         if symbol.is_empty() {
@@ -581,6 +602,11 @@ impl KnowledgeRetriever for TantivyRetriever {
                 related_symbols: related,
             });
         }
+        info!(
+            hits = out.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "symbol lookup done"
+        );
         Ok(out)
     }
 }
