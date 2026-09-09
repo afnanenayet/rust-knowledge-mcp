@@ -69,9 +69,10 @@ KnowledgeRetriever trait (sync)                                                 
   `SourceKind`), `DocumentId`, `SearchQuery`/`SearchHit`, the `KnowledgeRetriever`
   trait. No engine dependencies.
 - **`knowledge-index`**: ingestion + retrieval. One small module per concern
-  (`cargo`, `rustdoc`, `markdown`, `corpus`, `tantivy_index`, `store`,
-  `pipeline`, `eval`). `pipeline::index_workspace` is the end-to-end entry point
-  used by both CLI and tests.
+  (`cargo`, `config`, `error`, `rustdoc`, `markdown`, `corpus`,
+  `tantivy_index`, `store`, `pipeline`, `eval`). `pipeline::index_workspace` is the
+  end-to-end entry point used by both CLI and tests. `config` holds the
+  figue/facet `WorkspaceConfig` root shared by both frontends.
 - **`knowledge-cli` / `knowledge-mcp`**: thin frontends over the same engine.
 
 ### Key design decisions (see `docs/design.md` for full detail)

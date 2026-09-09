@@ -232,7 +232,7 @@ Search documentation of the resolved Cargo dependency universe of a workspace
 </td></tr>
     <tr class="search-item"><td class="names"><code>--index-dir</code> <code class="value-token">&lt;PATHBUF&gt;</code><span class="name-meta">Optional value</span></td><td><p>Directory for the knowledge index. Defaults to &lt;workspace&gt;/.rust-knowledge or $RUST_KNOWLEDGE_INDEX_DIR.</p>
 </td></tr>
-    <tr class="search-item"><td class="names"><code>--cargo</code> <code class="value-token">&lt;PATHBUF&gt;</code><span class="name-meta">Optional value</span></td><td><p>Explicit cargo binary for metadata/rustdoc invocations. Defaults to cargo on $PATH, or $RUST_KNOWLEDGE_CARGO.</p>
+    <tr class="search-item"><td class="names"><code>--cargo</code> <code class="value-token">&lt;PATHBUF&gt;</code><span class="name-meta">Optional value</span></td><td><p>Explicit cargo binary for metadata/rustdoc invocations. Defaults to $RUST_KNOWLEDGE_CARGO, or cargo on $PATH.</p>
 </td></tr>
     <tr class="search-item"><td class="names"><code>--log</code> <code class="value-token">&lt;STRING&gt;</code><span class="name-meta">Optional value</span></td><td><p>Tracing env-filter (e.g. &quot;info&quot;, &quot;demo_core=debug&quot;). -v overrides it with &quot;debug&quot;.</p>
 </td></tr>
@@ -271,7 +271,7 @@ Search documentation of the resolved Cargo dependency universe of a workspace
 </div>
 </details>
 </div></div>
-<div id="config-node-config-cargo" class="schema-node search-item config-field" data-breadcrumb-label="cargo" data-breadcrumb-anchor="config-node-config-cargo"><div class="config-name"><code>cargo</code> <span class="meta">PathBuf</span><span class="name-meta">Optional</span></div><div class="config-desc"><p>Explicit cargo binary for metadata/rustdoc invocations. Defaults to cargo on $PATH, or $RUST_KNOWLEDGE_CARGO.</p>
+<div id="config-node-config-cargo" class="schema-node search-item config-field" data-breadcrumb-label="cargo" data-breadcrumb-anchor="config-node-config-cargo"><div class="config-name"><code>cargo</code> <span class="meta">PathBuf</span><span class="name-meta">Optional</span></div><div class="config-desc"><p>Explicit cargo binary for metadata/rustdoc invocations. Defaults to $RUST_KNOWLEDGE_CARGO, or cargo on $PATH.</p>
 <details class="override-details"><summary>Overrides</summary>
 <div class="override-grid">
 <span class="override-label"><button class="copy-button" type="button" data-copy="--config.cargo" aria-label="Copy --config.cargo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span class="sr-only">Copy --config.cargo</span></button>CLI</span><code>--config.cargo</code>

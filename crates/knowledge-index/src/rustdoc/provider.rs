@@ -57,9 +57,11 @@ pub struct GeneratedRustdocProvider {
     artifact_dir: PathBuf,
     /// Toolchain passed to cargo (e.g. "nightly"); None = plain cargo.
     toolchain: Option<String>,
-    /// Explicit cargo binary resolved by the caller's config layer; None
-    /// falls back to $RUST_KNOWLEDGE_CARGO, then to cargo on $PATH.
-    cargo: Option<PathBuf>,
+    /// Cargo binary resolved once at construction via
+    /// [crate::cargo::resolve_cargo] (explicit `--cargo` beats
+    /// $RUST_KNOWLEDGE_CARGO, which beats cargo on $PATH); None means
+    /// plain `cargo` from $PATH.
+    cargo: Option<String>,
 }
 
 impl GeneratedRustdocProvider {
@@ -67,7 +69,29 @@ impl GeneratedRustdocProvider {
         universe: &CargoUniverse,
         artifact_dir: PathBuf,
         toolchain: Option<String>,
-        cargo: Option<PathBuf>,
+        cargo: Option<&Path>,
+    ) -> Self {
+        Self::new_with_env(
+            universe,
+            artifact_dir,
+            toolchain,
+            cargo,
+            crate::cargo::cargo_env_value(),
+        )
+    }
+
+    /// [new] with the [crate::cargo::CARGO_ENV_VAR] value supplied by the
+    /// caller. The process environment cannot be swapped in-process (and
+    /// mutating it would race other tests), so this is the seam that lets
+    /// tests pin the constructor's resolution — the same
+    /// [crate::cargo::resolve_cargo] precedence the metadata spawn
+    /// applies: explicit `--cargo` over the env var over $PATH.
+    fn new_with_env(
+        universe: &CargoUniverse,
+        artifact_dir: PathBuf,
+        toolchain: Option<String>,
+        cargo: Option<&Path>,
+        env_cargo: Option<String>,
     ) -> Self {
         GeneratedRustdocProvider {
             manifest_path: universe.workspace_root().join("Cargo.toml"),
@@ -75,31 +99,21 @@ impl GeneratedRustdocProvider {
             target_directory: universe.target_directory().to_path_buf(),
             artifact_dir,
             toolchain,
-            cargo,
+            cargo: crate::cargo::resolve_cargo(cargo, env_cargo),
         }
     }
 
-    /// The cargo invocation prefix. An explicit cargo binary (from the
-    /// constructor or $RUST_KNOWLEDGE_CARGO) replaces the PATH lookup (and
-    /// suppresses the +toolchain argument: the caller controls the
-    /// toolchain, including the rustdoc on PATH).
+    /// The cargo invocation prefix. An explicit cargo binary (resolved by
+    /// the constructor from --cargo or $RUST_KNOWLEDGE_CARGO) replaces
+    /// the PATH lookup (and suppresses the +toolchain argument: the
+    /// caller controls the toolchain, including the rustdoc on PATH).
     fn cargo_argv(&self) -> Vec<String> {
-        let explicit = self
-            .cargo
-            .as_ref()
-            .map(|path| path.to_string_lossy().trim().to_string())
-            .or_else(|| {
-                std::env::var("RUST_KNOWLEDGE_CARGO")
-                    .ok()
-                    .map(|cargo| cargo.trim().to_string())
-            })
-            .filter(|explicit| !explicit.is_empty());
-        if let Some(explicit) = explicit {
-            return vec![explicit];
-        }
-        match &self.toolchain {
-            Some(t) => vec!["cargo".into(), format!("+{t}")],
-            None => vec!["cargo".into()],
+        match &self.cargo {
+            Some(cargo) => vec![cargo.clone()],
+            None => match &self.toolchain {
+                Some(t) => vec!["cargo".into(), format!("+{t}")],
+                None => vec!["cargo".into()],
+            },
         }
     }
 
@@ -283,5 +297,168 @@ fn stderr_tail(stderr: &[u8], max: usize) -> String {
 impl GeneratedRustdocProvider {
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use cargo_metadata::Package;
+
+    use super::{GeneratedRustdocProvider, RustdocProvider};
+    use crate::cargo::CargoUniverse;
+    use crate::error::IndexError;
+
+    const BAD_CARGO: &str = "/definitely-not-a-cargo-binary-0123456789";
+
+    /// A provider constructed through [GeneratedRustdocProvider::new_with_env]
+    /// (the constructor's test seam). The caller owns the artifact-dir
+    /// [tempfile::TempDir] so every run gets an isolated, self-cleaning
+    /// directory (concurrent runs share nothing); the universe and paths
+    /// only need to exist for the spawn, not on disk.
+    fn provider(
+        artifacts: &tempfile::TempDir,
+        cargo: Option<&Path>,
+        toolchain: Option<String>,
+        env_cargo: Option<String>,
+    ) -> GeneratedRustdocProvider {
+        let universe = minimal_universe();
+        GeneratedRustdocProvider::new_with_env(
+            &universe,
+            artifacts.path().to_path_buf(),
+            toolchain,
+            cargo,
+            env_cargo,
+        )
+    }
+
+    #[test]
+    fn cargo_argv_uses_the_resolved_binary_and_suppresses_toolchain() {
+        let artifacts = tempfile::tempdir().expect("tempdir for rustdoc artifacts");
+        let provider = provider(
+            &artifacts,
+            Some(Path::new("/opt/cargo")),
+            Some("nightly".to_string()),
+            Some("/from-env".to_string()),
+        );
+        assert_eq!(
+            provider.cargo_argv(),
+            vec!["/opt/cargo".to_string()],
+            "an explicit cargo binary replaces the PATH lookup and the \
+             +toolchain argument (the caller controls the toolchain)"
+        );
+    }
+
+    #[test]
+    fn cargo_argv_applies_the_toolchain_only_for_path_cargo() {
+        let artifacts = tempfile::tempdir().expect("tempdir for rustdoc artifacts");
+        let with_toolchain = provider(&artifacts, None, Some("nightly".to_string()), None);
+        assert_eq!(
+            with_toolchain.cargo_argv(),
+            vec!["cargo".to_string(), "+nightly".to_string()]
+        );
+        let plain = provider(&artifacts, None, None, None);
+        assert_eq!(plain.cargo_argv(), vec!["cargo".to_string()]);
+    }
+
+    /// Pins the constructor's cargo resolution — the wiring
+    /// [GeneratedRustdocProvider::new] performs — not just the argv the
+    /// resolved value produces: an explicit binary beats the env var,
+    /// the env var fills the gap (the same precedence the metadata
+    /// spawn applies). A regression in new() (forgetting the env read,
+    /// or bypassing resolve_cargo) keeps the spawn tests below green only
+    /// if this one stays loud.
+    #[test]
+    fn constructor_resolves_cargo_explicit_over_env() {
+        let artifacts = tempfile::tempdir().expect("tempdir for rustdoc artifacts");
+        let explicit = provider(
+            &artifacts,
+            Some(Path::new("/explicit-cargo")),
+            Some("nightly".to_string()),
+            Some("/from-env".to_string()),
+        );
+        assert_eq!(
+            explicit.cargo.as_deref(),
+            Some("/explicit-cargo"),
+            "an explicit --cargo must beat $RUST_KNOWLEDGE_CARGO at construction"
+        );
+        let via_env = provider(&artifacts, None, None, Some("/from-env".to_string()));
+        assert_eq!(
+            via_env.cargo.as_deref(),
+            Some("/from-env"),
+            "the env var must fill the gap when no explicit cargo was given"
+        );
+    }
+
+    /// Pins the --cargo plumbing on the rustdoc-generation spawn: an
+    /// explicit cargo binary must reach the spawn itself (a nonexistent
+    /// path fails it) instead of silently falling back to cargo on
+    /// $PATH. Constructed through the constructor seam so the flag's
+    /// whole path is exercised: resolve_cargo at construction, then the
+    /// spawn. Mirrors the metadata-spawn pin in
+    /// [crate::pipeline::open_retriever_with].
+    #[test]
+    fn explicit_cargo_reaches_the_rustdoc_spawn() {
+        let universe = minimal_universe();
+        let artifacts = tempfile::tempdir().expect("tempdir for rustdoc artifacts");
+        let provider = GeneratedRustdocProvider::new_with_env(
+            &universe,
+            artifacts.path().to_path_buf(),
+            Some("nightly".to_string()),
+            Some(Path::new(BAD_CARGO)),
+            None,
+        );
+        let pkg = lib_package();
+        let error = match provider.generate(&universe, &[&pkg]) {
+            Err(error) => error,
+            Ok(_) => panic!("a bad cargo path must fail the rustdoc spawn"),
+        };
+        match error {
+            IndexError::RustdocSpawn { command, .. } => assert!(
+                command.contains(BAD_CARGO),
+                "the spawn error must name the explicit cargo binary, got: {command}"
+            ),
+            other => panic!("expected a spawn failure, got: {other:?}"),
+        }
+    }
+
+    fn minimal_universe() -> CargoUniverse {
+        let json = r#"{
+            "packages": [],
+            "workspace_members": [],
+            "workspace_root": "/rustdoc-test",
+            "target_directory": "/rustdoc-test/target",
+            "version": 1
+        }"#;
+        CargoUniverse::from_metadata_json(json).expect("minimal metadata should parse")
+    }
+
+    /// A package with a lib target, so generation gets far enough to
+    /// construct and run the cargo rustdoc spawn.
+    fn lib_package() -> Package {
+        serde_json::from_value(serde_json::json!({
+            "name": "demo_lib",
+            "version": "0.1.0",
+            "id": "path+file:///rustdoc-test#demo_lib@0.1.0",
+            "targets": [{
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "name": "demo_lib",
+                "src_path": "/rustdoc-test/src/lib.rs",
+                "edition": "2021",
+                "doc": true,
+                "doctest": true,
+                "test": true
+            }],
+            "dependencies": [],
+            "features": {},
+            "manifest_path": "/rustdoc-test/Cargo.toml",
+            "edition": "2021",
+            "authors": [],
+            "categories": [],
+            "keywords": []
+        }))
+        .expect("package literal should parse")
     }
 }

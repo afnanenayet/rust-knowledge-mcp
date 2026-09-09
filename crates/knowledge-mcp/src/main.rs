@@ -16,16 +16,31 @@
 
 use std::process::ExitCode;
 
-use knowledge_index::config::{
-    MCP_DESCRIPTION,
-    McpArgs,
-    WorkspaceConfig,
-    effective_log_filter,
-    parse_std_args,
-};
+use facet::Facet;
+use figue::{self as args, FigueBuiltins};
+use knowledge_index::config::{WorkspaceConfig, parse_std_args};
 use knowledge_mcp::KnowledgeServer;
 use rmcp::service::serve_server;
 use rmcp::transport::stdio;
+
+/// User-facing description of the `knowledge-mcp` binary.
+///
+/// Single source for every surface that describes the binary: the figue
+/// help configuration passed by its `main` and any generated reference.
+const DESCRIPTION: &str = "MCP server exposing the rust-knowledge retrieval engine";
+
+/// Full argument surface of the `knowledge-mcp` binary.
+#[derive(Facet, Debug)]
+struct McpArgs {
+    /// Workspace knobs, layered by figue (CLI > env > file > defaults).
+    #[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]
+    config: WorkspaceConfig,
+
+    /// Standard figue builtins: --help, --html-help, --version,
+    /// --completions, --export-jsonschemas.
+    #[facet(flatten)]
+    builtins: FigueBuiltins,
+}
 
 fn main() -> ExitCode {
     // Parse first: the log filter itself comes from figue's config layer
@@ -37,11 +52,22 @@ fn main() -> ExitCode {
     // version, completions and schemas print to stdout and exit 0;
     // diagnostics print to stderr and exit 1 (git-like-multitool recipe).
     let cli =
-        parse_std_args::<McpArgs>("knowledge-mcp", env!("CARGO_PKG_VERSION"), MCP_DESCRIPTION)
-            .unwrap();
+        parse_std_args::<McpArgs>("knowledge-mcp", env!("CARGO_PKG_VERSION"), DESCRIPTION).unwrap();
+
+    // EnvFilter::new silently ignores invalid directives (and degrades to
+    // ERROR-only logging), so validate the layered filter where it
+    // becomes an EnvFilter instead of failing quietly later.
+    let filter = cli.config.log_filter(false);
+    let env_filter = match tracing_subscriber::EnvFilter::try_new(&filter) {
+        Ok(env_filter) => env_filter,
+        Err(error) => {
+            eprintln!("error: invalid log filter {filter:?}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     tracing_subscriber::fmt()
-        .with_env_filter(effective_log_filter(false, &cli.config.log))
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .with_target(false)
         .compact()
@@ -103,8 +129,25 @@ async fn run(config: &WorkspaceConfig) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use figue::MockEnv;
-    use knowledge_index::config::{MCP_DESCRIPTION, McpArgs, parse_args_with};
+    use knowledge_index::config::parse_args_with;
+
+    use super::{DESCRIPTION, McpArgs};
+
+    fn parse(argv: &[&str], env: MockEnv) -> McpArgs {
+        parse_args_with::<McpArgs>(
+            argv,
+            env,
+            "knowledge-mcp",
+            env!("CARGO_PKG_VERSION"),
+            DESCRIPTION,
+        )
+        .into_result()
+        .expect("argv should parse")
+        .get()
+    }
 
     /// Pins the --cargo plumbing end to end: the flag value must reach the
     /// cargo metadata spawn that discovers the workspace when --index-dir
@@ -112,16 +155,10 @@ mod tests {
     /// fallback). Mirrors the reviewer's probe against this binary.
     #[test]
     fn cargo_flag_reaches_the_metadata_spawn() {
-        let args = parse_args_with::<McpArgs>(
+        let args = parse(
             &["--cargo", "/definitely-not-a-cargo-binary-0123456789"],
             MockEnv::new(),
-            "knowledge-mcp",
-            env!("CARGO_PKG_VERSION"),
-            MCP_DESCRIPTION,
-        )
-        .into_result()
-        .expect("argv should parse")
-        .get();
+        );
         let error = match super::open_retriever(&args.config) {
             Err(error) => error,
             Ok(_) => panic!("a bad --cargo must fail the metadata spawn"),
@@ -129,6 +166,42 @@ mod tests {
         assert!(
             format!("{error:#}").contains("cargo metadata failed"),
             "the bad --cargo must fail the metadata spawn, got: {error:#}"
+        );
+    }
+
+    /// Pins the env wiring of the REAL [McpArgs] shape, not the TestArgs
+    /// lookalike in knowledge-index's config tests: the flattened config
+    /// root must keep reading $RUST_KNOWLEDGE_* — if its env_prefix or
+    /// flatten attribute drifts (a typo, an accidental rename), every
+    /// lookalike precedence test stays green while the deployed server
+    /// silently stops honoring every env var.
+    #[test]
+    fn env_layer_addresses_the_real_shape() {
+        let env = MockEnv::from_pairs([
+            ("RUST_KNOWLEDGE_INDEX_DIR", "/idx-from-env"),
+            ("RUST_KNOWLEDGE_CARGO", "/cargo-from-env"),
+            ("RUST_KNOWLEDGE_LOG", "warn"),
+        ]);
+        let args = parse(&[], env);
+        assert_eq!(
+            args.config.index_dir.as_deref(),
+            Some(Path::new("/idx-from-env")),
+            "the real shape must read $RUST_KNOWLEDGE_INDEX_DIR"
+        );
+        assert_eq!(
+            args.config.cargo.as_deref(),
+            Some(Path::new("/cargo-from-env")),
+            "the real shape must read $RUST_KNOWLEDGE_CARGO"
+        );
+        assert_eq!(args.config.log, "warn");
+
+        // And a flag still beats the env layer on the real shape.
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/idx-from-env")]);
+        let args = parse(&["--index-dir", "/idx-from-flag"], env);
+        assert_eq!(
+            args.config.index_dir.as_deref(),
+            Some(Path::new("/idx-from-flag")),
+            "a CLI flag must beat the env layer on the real shape"
         );
     }
 }

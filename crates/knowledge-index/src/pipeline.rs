@@ -75,7 +75,7 @@ pub fn index_workspace(
             &universe,
             index_dir.join("cache").join("rustdoc"),
             options.toolchain.clone(),
-            options.cargo.clone(),
+            options.cargo.as_deref(),
         )),
     };
 
@@ -119,21 +119,11 @@ pub fn index_workspace(
 
 /// Opens the index at the given directory, or the workspace default.
 ///
-/// Delegates to [open_retriever_with] with no explicit cargo binary:
-/// the metadata spawn then falls back to $RUST_KNOWLEDGE_CARGO and
-/// finally to cargo on $PATH.
-pub fn open_retriever(
-    manifest_path: Option<&Path>,
-    index_dir: Option<&Path>,
-) -> Result<TantivyRetriever, IndexError> {
-    open_retriever_with(manifest_path, index_dir, None)
-}
-
-/// Like [open_retriever], with an explicit cargo binary for the
-/// `cargo metadata` run that discovers the workspace when `index_dir`
-/// is absent. Both frontends pass their resolved `--cargo` here, so
-/// every path that spawns cargo honors the flag (see
-/// [CargoUniverse::load_with] for the None fallback chain).
+/// When `index_dir` is absent, a `cargo metadata` run discovers the
+/// workspace. Both frontends pass their resolved `--cargo` binary here,
+/// so every path that spawns cargo honors the flag (see
+/// [CargoUniverse::load_with] for the explicit-beats-env-beats-$PATH
+/// fallback chain).
 pub fn open_retriever_with(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,

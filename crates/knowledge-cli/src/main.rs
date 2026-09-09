@@ -18,17 +18,12 @@ use facet::Facet;
 use figue::{self as args, FigueBuiltins};
 use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
-use knowledge_index::config::{
-    WorkspaceConfig,
-    effective_log_filter,
-    parse_std_args,
-};
+use knowledge_index::config::{WorkspaceConfig, parse_std_args};
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
 
 const PROGRAM: &str = "rust-knowledge";
-const ABOUT: &str =
-    "Search documentation of the resolved Cargo dependency universe of a workspace";
+const ABOUT: &str = "Search documentation of the resolved Cargo dependency universe of a workspace";
 
 /// Command-line surface of `rust-knowledge`.
 #[derive(Facet, Debug)]
@@ -176,8 +171,25 @@ fn main() -> ExitCode {
     // diagnostics print to stderr and exit 1 (git-like-multitool recipe).
     let cli = parse_std_args::<Cli>(PROGRAM, env!("CARGO_PKG_VERSION"), ABOUT).unwrap();
 
+    // EnvFilter::new silently ignores invalid directives (and degrades to
+    // ERROR-only logging), so validate the layered filter where it
+    // becomes an EnvFilter instead of failing quietly later.
+    let filter = cli.config.log_filter(cli.verbose);
+    let env_filter = match tracing_subscriber::EnvFilter::try_new(&filter) {
+        Ok(env_filter) => env_filter,
+        Err(error) => {
+            eprintln!("error: invalid log filter {filter:?}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Logs go to stderr: stdout carries the commands' own output (one
+    // JSON object per line for --json subcommands), so a WARN/INFO line
+    // there would corrupt scripted consumption (knowledge-mcp does the
+    // same for its protocol channel).
     tracing_subscriber::fmt()
-        .with_env_filter(effective_log_filter(cli.verbose, &cli.config.log))
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
         .with_target(false)
         .compact()
         .init();
@@ -212,15 +224,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             item_kind,
             limit,
             json,
-        } => search(
-            cli,
-            query,
-            package,
-            source_kind,
-            item_kind,
-            *limit,
-            *json,
-        ),
+        } => search(cli, query, package, source_kind, item_kind, *limit, *json),
         Command::Get { id, json } => get(cli, id, *json),
         Command::Symbol {
             symbol,
@@ -336,7 +340,7 @@ fn dump_docs(
 ) -> anyhow::Result<()> {
     let universe = load_universe(cli)?;
     let scope = parse_scope(rustdoc_scope)?;
-    let index_dir = index_dir(cli, &universe);
+    let index_dir = cli.config.resolve_index_dir(universe.workspace_root());
 
     let provider: Box<dyn knowledge_index::rustdoc::RustdocProvider> = match prebuilt_rustdoc {
         Some(dir) => Box::new(PrebuiltRustdocProvider { dir: dir.clone() }),
@@ -344,7 +348,7 @@ fn dump_docs(
             &universe,
             index_dir.join("cache").join("rustdoc"),
             Some("nightly".to_string()),
-            cli.config.cargo.clone(),
+            cli.config.cargo.as_deref(),
         )),
     };
 
@@ -420,13 +424,6 @@ fn dump_docs(
     Ok(())
 }
 
-fn index_dir(cli: &Cli, universe: &CargoUniverse) -> PathBuf {
-    cli.config
-        .index_dir
-        .clone()
-        .unwrap_or_else(|| universe.workspace_root().join(".rust-knowledge"))
-}
-
 fn index(
     cli: &Cli,
     rustdoc_scope: &str,
@@ -436,7 +433,7 @@ fn index(
     let scope = parse_scope(rustdoc_scope)?;
     let options = knowledge_index::IndexOptions {
         rustdoc_scope: scope,
-        toolchain: toolchain.clone().or_else(|| Some("nightly".to_string())),
+        toolchain: Some(toolchain.clone().unwrap_or_else(|| "nightly".to_string())),
         prebuilt_rustdoc: prebuilt_rustdoc.clone(),
         skip_rustdoc: false,
         cargo: cli.config.cargo.clone(),
@@ -670,7 +667,7 @@ mod tests {
     use figue::{DriverError, MockEnv};
     use knowledge_index::config::parse_args_with;
 
-    use super::{ABOUT, Command, PROGRAM, Cli};
+    use super::{ABOUT, Cli, Command, PROGRAM};
 
     const VERSION: &str = "0.1.0";
 
@@ -806,7 +803,13 @@ mod tests {
                 assert!(text.contains("search"), "help text: {text}");
                 assert!(text.contains("<QUERY>"), "help text: {text}");
                 assert!(
-                    matches!(&e, DriverError::Help { suggestion: Some(_), .. }),
+                    matches!(
+                        &e,
+                        DriverError::Help {
+                            suggestion: Some(_),
+                            ..
+                        }
+                    ),
                     "a missing positional carries a corrected-command suggestion"
                 );
             }
@@ -920,7 +923,10 @@ mod tests {
         // No flag: the env var fills the gap.
         let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
         let cli = parse_ok_with_env(&["packages"], env);
-        assert_eq!(cli.config.index_dir.as_deref(), Some(Path::new("/from-env")));
+        assert_eq!(
+            cli.config.index_dir.as_deref(),
+            Some(Path::new("/from-env"))
+        );
     }
 
     #[test]
@@ -973,7 +979,7 @@ mod tests {
         assert_eq!(
             super::render_config_reference(),
             committed,
-            "docs/config-reference.html must be regenerate with: cargo run -p knowledge-cli -- config-docs"
+            "docs/config-reference.html must be regenerated with: cargo run -p knowledge-cli -- config-docs"
         );
     }
 

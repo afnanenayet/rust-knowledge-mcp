@@ -86,7 +86,10 @@ fn identity_preserves_the_reported_manifest_location() {
         );
         assert_eq!(
             identity.root(),
-            identity.manifest_path.parent().expect("manifest has a parent"),
+            identity
+                .manifest_path
+                .parent()
+                .expect("manifest has a parent"),
             "package root for {} must be the manifest's directory",
             identity.display()
         );

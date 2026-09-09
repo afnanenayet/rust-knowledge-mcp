@@ -23,6 +23,9 @@ fn parse_failure_keeps_stdout_protocol_clean() {
         !output.stderr.is_empty(),
         "the parse diagnostic belongs on stderr"
     );
-    let code = output.status.code().expect("the binary should exit normally");
+    let code = output
+        .status
+        .code()
+        .expect("the binary should exit normally");
     assert_eq!(code, 1, "figue-native usage errors exit 1");
 }
