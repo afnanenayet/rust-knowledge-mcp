@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   build:
@@ -25,6 +27,8 @@ jobs:
       # Clippy must run on nightly: the workspace lint config uses nightly-only lints (see AGENTS.md).
       - name: Install nightly toolchain
         run: rustup toolchain install nightly --profile minimal --component clippy
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.11
       - name: Clippy
         run: cargo +nightly clippy --all-targets --all-features -- -D warnings
       - name: Build
