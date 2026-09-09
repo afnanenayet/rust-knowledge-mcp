@@ -1,5 +1,8 @@
 # rust-knowledge
 
+[![codecov](https://codecov.io/gh/afnanenayet/rust-knowledge-mcp/graph/badge.svg?token=Q8VRZY2HXH)](https://codecov.io/gh/afnanenayet/rust-knowledge-mcp)
+[![Rust](https://github.com/afnanenayet/rust-knowledge-mcp/actions/workflows/rust.yml/badge.svg)](https://github.com/afnanenayet/rust-knowledge-mcp/actions/workflows/rust.yml)
+
 A local, Cargo-aware documentation retrieval engine for Rust monorepos, built
 for coding agents (Claude Code, Codex) and humans. It answers questions like
 "what API should I use?", "how is this crate intended to work?" and "where is
