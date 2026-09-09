@@ -10,6 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
+  # Need to disable incremental builds for sccache support
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build:
@@ -41,6 +43,10 @@ jobs:
         run: |
           cargo llvm-cov --no-report nextest
           cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Publish Test Report
         id: report
         uses: mikepenz/action-junit-report@v6
