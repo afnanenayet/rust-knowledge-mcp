@@ -425,6 +425,10 @@ impl KnowledgeRetriever for TantivyRetriever {
             .ok_or_else(|| KnowledgeError::DocumentNotFound(id.clone()))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "symbol lookup keeps its scoring and result projection together"
+    )]
     fn symbol_lookup(&self, query: &SymbolQuery) -> Result<Vec<SymbolInfo>> {
         let span = info_span!("symbol_lookup", symbol = %query.symbol);
         let _enter = span.enter();
@@ -468,9 +472,8 @@ impl KnowledgeRetriever for TantivyRetriever {
             ));
         }
         // Qualified queries: AND over every query token on the tokenized
-        // symbol path (segments are split exactly the way the index
-        // tokenizer splits them, so "spawn_blocking" becomes spawn + blocking)
-        // — this ranks the fully matching path above bare last-segment ties.
+        // symbol path; this ranks the fully matching path above bare
+        // last-segment ties.
         let path_tokens: Vec<String> = symbol
             .split(|c: char| !c.is_alphanumeric())
             .filter(|t| !t.is_empty())
