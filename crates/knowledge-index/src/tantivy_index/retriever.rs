@@ -39,6 +39,11 @@ pub struct TantivyRetriever {
 
 impl TantivyRetriever {
     /// Opens an existing index (built by `build_index` / `index_workspace`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when metadata or the Tantivy index is missing,
+    /// malformed, or cannot be opened.
     pub fn open(index_dir: &Path) -> Result<Self> {
         let meta_path = IndexMeta::meta_path(index_dir);
         let meta = IndexMeta::load(&meta_path).map_err(|e| match e {
@@ -80,6 +85,10 @@ impl TantivyRetriever {
     }
 
     /// The normalized corpus stored beside the index (debug tooling).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stored corpus cannot be read or decoded.
     pub fn read_corpus(&self) -> Result<Vec<KnowledgeDocument>> {
         crate::store::read_corpus(&self.index_dir)
             .map_err(|e| KnowledgeError::Engine(e.to_string()))
@@ -393,7 +402,7 @@ impl KnowledgeRetriever for TantivyRetriever {
         }
         info!(
             hits = hits.len(),
-            elapsed_ms = start.elapsed().as_millis() as u64,
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             "search done"
         );
         Ok(hits)
@@ -556,7 +565,8 @@ impl KnowledgeRetriever for TantivyRetriever {
                 kind: doc
                     .get_first(self.fields.item_kind)
                     .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty()).map_or_else(|| "module".to_string(), str::to_string),
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| "module".to_string(), str::to_string),
                 symbol_path,
                 signature: doc
                     .get_first(self.fields.signature)

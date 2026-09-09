@@ -54,13 +54,21 @@ pub fn default_index_dir(workspace_root: &Path) -> PathBuf {
 }
 
 /// Runs the full indexing pipeline for a workspace.
+///
+/// # Errors
+///
+/// Returns an error when Cargo metadata, rustdoc generation, corpus
+/// normalization, or index construction fails.
 pub fn index_workspace(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
     options: &IndexOptions,
 ) -> Result<IndexOutcome, IndexError> {
     let universe = CargoUniverse::load_with(manifest_path, options.cargo.as_deref())?;
-    let index_dir = index_dir.map_or_else(|| default_index_dir(universe.workspace_root()), Path::to_path_buf);
+    let index_dir = index_dir.map_or_else(
+        || default_index_dir(universe.workspace_root()),
+        Path::to_path_buf,
+    );
 
     let scope = if options.skip_rustdoc {
         RustdocScope::None
@@ -123,12 +131,18 @@ pub fn index_workspace(
 /// so every path that spawns cargo honors the flag (see
 /// [`CargoUniverse::load_with`] for the explicit-beats-env-beats-$PATH
 /// fallback chain).
+///
+/// # Errors
+///
+/// Returns an error when workspace discovery or opening the index fails.
 pub fn open_retriever_with(
     manifest_path: Option<&Path>,
     index_dir: Option<&Path>,
     cargo: Option<&Path>,
 ) -> Result<TantivyRetriever, IndexError> {
-    let index_dir = if let Some(dir) = index_dir { dir.to_path_buf() } else {
+    let index_dir = if let Some(dir) = index_dir {
+        dir.to_path_buf()
+    } else {
         let universe = CargoUniverse::load_with(manifest_path, cargo)?;
         default_index_dir(universe.workspace_root())
     };

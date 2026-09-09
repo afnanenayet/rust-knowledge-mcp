@@ -51,6 +51,11 @@ impl IndexMeta {
         self.schema_version
     }
 
+    /// Saves index metadata as pretty-printed JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when metadata cannot be serialized or written.
     pub fn save(&self, path: &Path) -> Result<(), IndexError> {
         let json = serde_json::to_string_pretty(self).map_err(|e| IndexError::MetaCorrupt {
             path: path.to_path_buf(),
@@ -60,6 +65,10 @@ impl IndexMeta {
     }
 
     /// Loads index metadata; a missing file means "no index here".
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the metadata file cannot be read or decoded.
     pub fn load(path: &Path) -> Result<IndexMeta, IndexError> {
         if !path.is_file() {
             return Err(IndexError::Knowledge(
@@ -98,6 +107,11 @@ impl IndexMeta {
 }
 
 /// Writes the normalized corpus as JSONL (debug/inspection artifact).
+///
+/// # Errors
+///
+/// Returns an error when the corpus file cannot be created or written, or a
+/// document cannot be serialized.
 pub fn write_corpus(
     index_dir: &Path,
     documents: &[knowledge_core::KnowledgeDocument],
@@ -118,6 +132,10 @@ pub fn write_corpus(
 }
 
 /// Loads the normalized corpus (used by tooling/tests, not by search).
+///
+/// # Errors
+///
+/// Returns an error when the corpus file cannot be read or a line is invalid.
 pub fn read_corpus(index_dir: &Path) -> Result<Vec<knowledge_core::KnowledgeDocument>, IndexError> {
     let path = IndexMeta::corpus_path(index_dir);
     let raw = std::fs::read_to_string(&path).map_err(|e| IndexError::io(&path, e))?;

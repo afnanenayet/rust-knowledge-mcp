@@ -54,6 +54,11 @@ pub struct CorpusReport {
 }
 
 /// Builds the full normalized corpus for the resolved universe.
+///
+/// # Errors
+///
+/// Returns an error when rustdoc normalization fails or a required local
+/// rustdoc artifact cannot be generated.
 pub fn build_corpus(
     universe: &CargoUniverse,
     provider: &dyn RustdocProvider,
@@ -98,7 +103,7 @@ pub fn build_corpus(
     for (spec, reason) in &generated.skipped {
         warn!(package = %spec, reason = %reason, "skipped rustdoc generation");
     }
-    report.skipped = generated.skipped.clone();
+    report.skipped.clone_from(&generated.skipped);
     for spec in &generated.unsupported {
         info!(package = %spec, "package has no lib target; indexing markdown only");
     }
@@ -109,7 +114,7 @@ pub fn build_corpus(
             report.rustdoc_format_version = Some(normalized.format_version);
         }
         if report.cargo_version.is_none() {
-            report.cargo_version = artifact.cargo_version.clone();
+            report.cargo_version.clone_from(&artifact.cargo_version);
         }
         report.warnings.extend(normalized.warnings);
         documents.extend(normalized.documents);

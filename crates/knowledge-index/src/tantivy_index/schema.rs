@@ -126,6 +126,11 @@ pub fn build_schema() -> Schema {
 }
 
 impl IndexFields {
+    /// Resolves all required fields from an existing Tantivy schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required field is absent.
     pub fn from_schema(schema: &Schema) -> Result<Self, IndexError> {
         fn field(schema: &Schema, name: &str) -> Result<Field, IndexError> {
             schema

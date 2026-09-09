@@ -40,6 +40,12 @@ pub struct GeneratedRustdocs {
 
 /// Generates or locates rustdoc JSON artifacts for packages.
 pub trait RustdocProvider {
+    /// Generates or locates artifacts for the selected packages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provider cannot inspect the workspace or
+    /// invoke the configured rustdoc toolchain.
     fn generate(
         &self,
         universe: &CargoUniverse,

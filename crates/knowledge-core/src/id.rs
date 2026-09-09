@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::fmt::Write as _;
 
 /// Unit separator used between identity parts.
 const SEP: u8 = 0x1f;
@@ -32,7 +33,7 @@ impl DocumentId {
         // enough for an LLM to echo back verbatim.
         let mut hex = String::with_capacity(32);
         for byte in digest.iter().take(16) {
-            hex.push_str(&format!("{byte:02x}"));
+            write!(hex, "{byte:02x}").expect("writing hexadecimal digits to a String cannot fail");
         }
         DocumentId(hex)
     }

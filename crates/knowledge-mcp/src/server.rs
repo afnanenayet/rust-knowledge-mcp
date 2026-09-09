@@ -211,6 +211,10 @@ fn parse_source_kinds(raw: Option<&[String]>) -> Result<Vec<SourceKind>, String>
 }
 
 #[tool_handler]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "rmcp's tool handler macro requires an async implementation"
+)]
 impl ServerHandler for KnowledgeServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(

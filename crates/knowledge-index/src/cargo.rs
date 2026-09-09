@@ -7,6 +7,7 @@
 //! directory by hand.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use cargo_metadata::{CargoOpt, Metadata, MetadataCommand, Package, PackageId};
@@ -73,7 +74,8 @@ pub fn resolve_cargo(explicit: Option<&Path>, env_cargo: Option<String>) -> Opti
 /// so a relative value would resolve differently per spawn. Fails
 /// soft (returns the input) if the path cannot be made absolute.
 fn absolute_bin(cargo: &str) -> String {
-    std::path::absolute(cargo).map_or_else(|_| cargo.to_owned(), |p| p.to_string_lossy().into_owned())
+    std::path::absolute(cargo)
+        .map_or_else(|_| cargo.to_owned(), |p| p.to_string_lossy().into_owned())
 }
 
 /// Reads [`CARGO_ENV_VAR`] the way [`resolve_cargo`] expects it. figue's env
@@ -86,10 +88,14 @@ fn absolute_bin(cargo: &str) -> String {
 /// (its `NotUnicode` error would vanish).
 pub(crate) fn cargo_env_value() -> Option<String> {
     match std::env::var_os(CARGO_ENV_VAR) {
-        Some(value) => if let Some(text) = value.to_str() { Some(text.to_owned()) } else {
-            warn!("${CARGO_ENV_VAR} is not valid UTF-8; using cargo from $PATH");
-            None
-        },
+        Some(value) => {
+            if let Some(text) = value.to_str() {
+                Some(text.to_owned())
+            } else {
+                warn!("${CARGO_ENV_VAR} is not valid UTF-8; using cargo from $PATH");
+                None
+            }
+        }
         None => None,
     }
 }
@@ -131,12 +137,21 @@ pub struct CargoUniverse {
 impl CargoUniverse {
     /// Runs cargo metadata for the given manifest (or the current
     /// directory's ancestor workspace when `manifest_path` is None).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Cargo cannot resolve workspace metadata.
     pub fn load(manifest_path: Option<&Path>) -> Result<Self, IndexError> {
         Self::load_with(manifest_path, None)
     }
 
     /// Like [load](Self::load), with an explicit cargo binary. A None
     /// cargo falls back to $`RUST_KNOWLEDGE_CARGO`, then to cargo on $PATH.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the selected Cargo binary cannot resolve
+    /// workspace metadata.
     pub fn load_with(
         manifest_path: Option<&Path>,
         cargo: Option<&Path>,
@@ -182,6 +197,10 @@ impl CargoUniverse {
 
     /// Parses an existing cargo metadata JSON blob (format version 1).
     /// Used by tests to exercise universe logic without spawning cargo.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `json` is not valid Cargo metadata.
     pub fn from_metadata_json(json: &str) -> Result<Self, IndexError> {
         let metadata: Metadata = serde_json::from_str(json).map_err(IndexError::cargo_metadata)?;
         let by_id = metadata
@@ -234,6 +253,11 @@ impl CargoUniverse {
     /// the same crate in one graph) require the version suffix. This is the
     /// lookup contract the whole system uses: no name-based guessing beyond
     /// this point.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the package is absent or a bare name is
+    /// ambiguous.
     pub fn resolve_spec(&self, spec: &str) -> Result<&Package, IndexError> {
         if let Some((name, version)) = spec.split_once('@') {
             return self
@@ -251,7 +275,12 @@ impl CargoUniverse {
             0 => Err(IndexError::PackageNotFound {
                 spec: spec.to_string(),
             }),
-            1 => Ok(matches.into_iter().next().expect("exactly one match")),
+            1 => matches
+                .into_iter()
+                .next()
+                .ok_or_else(|| IndexError::PackageNotFound {
+                    spec: spec.to_string(),
+                }),
             _ => {
                 let versions = matches
                     .iter()
@@ -324,7 +353,12 @@ impl CargoUniverse {
     #[must_use]
     pub fn enabled_features(&self, id: &PackageId) -> Vec<String> {
         self.node(id)
-            .map(|n| n.features.iter().map(std::string::ToString::to_string).collect())
+            .map(|n| {
+                n.features
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -353,7 +387,7 @@ impl CargoUniverse {
             hasher.update([0x1f]);
         }
         let digest = hasher.finalize();
-        hex(digest.get(..16).expect("sha256 digest is 32 bytes"))
+        hex(digest.get(..16).unwrap_or_default())
     }
 
     /// Path of the workspace Cargo.lock, if present.
@@ -386,10 +420,7 @@ fn hash_file(path: &Path) -> String {
         Ok(bytes) => {
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
-            hex(hasher
-                .finalize()
-                .get(..16)
-                .expect("sha256 digest is 32 bytes"))
+            hex(hasher.finalize().get(..16).unwrap_or_default())
         }
         Err(error) => {
             warn!(
@@ -403,7 +434,11 @@ fn hash_file(path: &Path) -> String {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(output, "{byte:02x}").expect("writing hexadecimal digits to a String cannot fail");
+    }
+    output
 }
 
 #[cfg(test)]

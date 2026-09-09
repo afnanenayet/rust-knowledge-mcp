@@ -206,8 +206,7 @@ pub fn render_type(t: &Type) -> String {
     match t {
         Type::ResolvedPath(p) => render_path(p),
         Type::DynTrait(d) => render_dyn(d),
-        Type::Generic(s) => s.clone(),
-        Type::Primitive(s) => s.clone(),
+        Type::Generic(s) | Type::Primitive(s) => s.clone(),
         Type::FunctionPointer(fp) => {
             let inputs: Vec<String> = fp
                 .sig

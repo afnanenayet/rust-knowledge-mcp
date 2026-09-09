@@ -91,9 +91,8 @@ fn rel_name(path: &Path, root: &Path) -> String {
 }
 
 fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -103,16 +102,15 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
             if !SKIP_DIRS.contains(&name.as_ref()) {
                 collect_markdown(&path, out);
             }
-        } else {
-            let lower = name.to_lowercase();
-            if lower.ends_with(".md") || lower.ends_with(".markdown") {
-                if let Ok(meta) = entry.metadata()
-                    && meta.len() <= MAX_FILE_BYTES
-                {
-                    out.push(path);
-                } else {
-                    debug!(path = %path.display(), "skipping oversized markdown file");
-                }
+        } else if path.extension().is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+        }) {
+            if let Ok(meta) = entry.metadata()
+                && meta.len() <= MAX_FILE_BYTES
+            {
+                out.push(path);
+            } else {
+                debug!(path = %path.display(), "skipping oversized markdown file");
             }
         }
     }
@@ -174,7 +172,7 @@ impl LineIndex {
 
     fn line(&self, offset: usize) -> u32 {
         let before = self.newline_offsets.partition_point(|&n| n < offset);
-        (before + 1) as u32
+        u32::try_from(before + 1).unwrap_or(u32::MAX)
     }
 }
 
@@ -235,30 +233,21 @@ impl Chunker<'_> {
                     self.append_with_split(&t);
                 }
             }
-            Event::Start(Tag::Paragraph) => {
+            Event::Start(Tag::Paragraph | Tag::List(_)) => {
                 self.split_if_full(1);
             }
-            Event::End(TagEnd::Paragraph) => {
+            Event::End(TagEnd::Paragraph | TagEnd::CodeBlock | TagEnd::List(_)) => {
                 self.buf.push_str("\n\n");
             }
             Event::Start(Tag::CodeBlock(_)) => {
                 self.split_if_full(1);
                 self.buf.push('\n');
             }
-            Event::End(TagEnd::CodeBlock) => {
-                self.buf.push_str("\n\n");
-            }
-            Event::Start(Tag::List(_)) => {
-                self.split_if_full(1);
-            }
             Event::Start(Tag::Item) => {
                 if !self.buf.is_empty() {
                     self.buf.push('\n');
                 }
                 self.buf.push_str("- ");
-            }
-            Event::End(TagEnd::List(_)) => {
-                self.buf.push_str("\n\n");
             }
             Event::SoftBreak | Event::HardBreak => {
                 if self.collecting_heading {

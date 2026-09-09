@@ -297,9 +297,9 @@ fn parse_scope(name: &str) -> anyhow::Result<RustdocScope> {
 
 fn dump_docs(
     cli: &Cli,
-    package: &Option<String>,
+    package: Option<&String>,
     rustdoc_scope: &str,
-    prebuilt_rustdoc: &Option<PathBuf>,
+    prebuilt_rustdoc: Option<&PathBuf>,
     json: bool,
 ) -> anyhow::Result<()> {
     let universe = load_universe(cli)?;
@@ -391,8 +391,8 @@ fn dump_docs(
 fn index(
     cli: &Cli,
     rustdoc_scope: &str,
-    toolchain: &Option<String>,
-    prebuilt_rustdoc: &Option<PathBuf>,
+    toolchain: Option<&String>,
+    prebuilt_rustdoc: Option<&PathBuf>,
 ) -> anyhow::Result<()> {
     let scope = parse_scope(rustdoc_scope)?;
     let options = knowledge_index::IndexOptions {
@@ -600,7 +600,8 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
     for outcome in &outcomes {
         let status = if outcome.passed() { "PASS" } else { "FAIL" };
         let rank = outcome
-            .rank.map_or_else(|| "-".to_string(), |r| r.to_string());
+            .rank
+            .map_or_else(|| "-".to_string(), |r| r.to_string());
         println!(
             "{status} rank {rank:>2} {:>16} {:?}",
             outcome.case.category, outcome.case.text

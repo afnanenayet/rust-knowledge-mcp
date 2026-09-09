@@ -132,15 +132,15 @@ pub fn parse_std_args<T: Facet<'static>>(
 /// rest; a non-zero count is a hard parse failure in [`parse_std_args`]
 /// (figue parses String CLI values only).
 fn utf8_argv<I: Iterator<Item = std::ffi::OsString>>(args: I) -> (Vec<String>, usize) {
-    let mut argv = Vec::new();
+    let mut utf8_args = Vec::new();
     let mut skipped = 0;
     for arg in args {
         match arg.to_str() {
-            Some(text) => argv.push(text.to_owned()),
+            Some(text) => utf8_args.push(text.to_owned()),
             None => skipped += 1,
         }
     }
-    (argv, skipped)
+    (utf8_args, skipped)
 }
 
 /// [`parse_std_args`] over an explicit argv and environment, for tests.

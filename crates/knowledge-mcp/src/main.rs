@@ -4,7 +4,7 @@
 //!
 //! Typical client configuration:
 //! {"mcpServers": {"rust-knowledge": {"command": "knowledge-mcp",
-//!   "args": ["--manifest-path", "/path/to/workspace/Cargo.toml"]}}}
+//!   `args`: [`--manifest-path`, `/path/to/workspace/Cargo.toml`]}}}
 //!
 //! Arguments are parsed by figue over a facet shape (issue #2): the
 //! flattened config root layers CLI flags over the `RUST_KNOWLEDGE`_* env
