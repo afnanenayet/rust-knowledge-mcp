@@ -204,12 +204,23 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             rustdoc_scope,
             prebuilt_rustdoc,
             json,
-        } => dump_docs(cli, package, rustdoc_scope, prebuilt_rustdoc, *json),
+        } => dump_docs(
+            cli,
+            package.as_ref(),
+            rustdoc_scope,
+            prebuilt_rustdoc.as_ref(),
+            *json,
+        ),
         Command::Index {
             rustdoc_scope,
             toolchain,
             prebuilt_rustdoc,
-        } => index(cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
+        } => index(
+            cli,
+            rustdoc_scope,
+            toolchain.as_ref(),
+            prebuilt_rustdoc.as_ref(),
+        ),
         Command::Search {
             query,
             package,
@@ -397,8 +408,8 @@ fn index(
     let scope = parse_scope(rustdoc_scope)?;
     let options = knowledge_index::IndexOptions {
         rustdoc_scope: scope,
-        toolchain: Some(toolchain.clone().unwrap_or_else(|| "nightly".to_string())),
-        prebuilt_rustdoc: prebuilt_rustdoc.clone(),
+        toolchain: Some(toolchain.cloned().unwrap_or_else(|| "nightly".to_string())),
+        prebuilt_rustdoc: prebuilt_rustdoc.cloned(),
         skip_rustdoc: false,
         cargo: cli.config.cargo.clone(),
     };
