@@ -1,4 +1,4 @@
-//! The MCP tool surface: knowledge_search, doc_read, symbol_lookup.
+//! The MCP tool surface: `knowledge_search`, `doc_read`, `symbol_lookup`.
 //!
 //! Tool semantics are designed for agent token economics:
 //! 1. search documentation first,
@@ -21,13 +21,13 @@ pub struct KnowledgeServer {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct KnowledgeSearchParams {
     /// Free-form natural-language question or Rust identifiers, e.g.
-    /// "how should CPU heavy work interact with async IO" or "spawn_blocking".
+    /// "how should CPU heavy work interact with async IO" or "`spawn_blocking`".
     #[schemars(description = "Free-form question or Rust identifiers to search documentation for")]
     pub query: String,
     /// Optional package filters: package names or name@version. Empty = all packages.
     #[schemars(description = "Optional: restrict to these packages (name or name@version)")]
     pub packages: Option<Vec<String>>,
-    /// Optional source kinds: rustdoc_item, rustdoc_module, crate_readme, markdown_document.
+    /// Optional source kinds: `rustdoc_item`, `rustdoc_module`, `crate_readme`, `markdown_document`.
     #[schemars(
         description = "Optional: restrict to these source kinds (rustdoc_item, rustdoc_module, crate_readme, markdown_document)"
     )]
@@ -44,14 +44,14 @@ pub struct KnowledgeSearchParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DocReadParams {
-    /// Stable document id as returned by knowledge_search or symbol_lookup.
+    /// Stable document id as returned by `knowledge_search` or `symbol_lookup`.
     #[schemars(description = "The stable document id from knowledge_search or symbol_lookup")]
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolLookupParams {
-    /// Symbol path or last segment, e.g. tokio::task::spawn_blocking or spawn_blocking.
+    /// Symbol path or last segment, e.g. `tokio::task::spawn_blocking` or `spawn_blocking`.
     #[schemars(
         description = "Symbol path or last segment, e.g. tokio::task::spawn_blocking or spawn_blocking"
     )]
@@ -66,6 +66,7 @@ pub struct SymbolLookupParams {
 
 #[tool_router]
 impl KnowledgeServer {
+    #[must_use]
     pub fn new(retriever: TantivyRetriever) -> Self {
         KnowledgeServer { retriever }
     }
@@ -204,12 +205,16 @@ fn parse_source_kinds(raw: Option<&[String]>) -> Result<Vec<SourceKind>, String>
     };
     let mut kinds = Vec::with_capacity(raw.len());
     for item in raw {
-        kinds.push(item.parse::<SourceKind>().map_err(|e| e.to_string())?);
+        kinds.push(item.parse::<SourceKind>().map_err(|e| e.clone())?);
     }
     Ok(kinds)
 }
 
 #[tool_handler]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "rmcp's tool handler macro requires an async implementation"
+)]
 impl ServerHandler for KnowledgeServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(

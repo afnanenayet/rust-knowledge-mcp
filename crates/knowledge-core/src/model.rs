@@ -1,6 +1,6 @@
 //! The normalized corpus model.
 //!
-//! Every retrievable artifact is a [KnowledgeDocument] with full provenance:
+//! Every retrievable artifact is a [`KnowledgeDocument`] with full provenance:
 //! which package (exact Cargo identity, not just crate name), which source
 //! kind, where it came from on disk, and — for Rust symbols — the qualified
 //! path and source span.
@@ -34,6 +34,7 @@ impl SourceKind {
         SourceKind::MarkdownDocument,
     ];
 
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             SourceKind::RustdocItem => "rustdoc_item",
@@ -44,6 +45,7 @@ impl SourceKind {
     }
 
     /// True for documents derived from rustdoc JSON.
+    #[must_use]
     pub fn is_rustdoc(&self) -> bool {
         matches!(self, SourceKind::RustdocItem | SourceKind::RustdocModule)
     }
@@ -97,6 +99,7 @@ pub struct PackageIdentity {
 
 impl PackageIdentity {
     /// Package root directory (the manifest's parent).
+    #[must_use]
     pub fn root(&self) -> &Path {
         self.manifest_path
             .parent()
@@ -106,6 +109,7 @@ impl PackageIdentity {
     /// Short human-readable source label ("local", "registry", "git").
     /// Distinguishing workspace members from path dependencies requires the
     /// full Cargo metadata and lives in `knowledge-index`.
+    #[must_use]
     pub fn source_label(&self) -> &str {
         match &self.source {
             None => "local",
@@ -115,6 +119,7 @@ impl PackageIdentity {
         }
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         format!("{}@{}", self.name, self.version)
     }
@@ -123,7 +128,7 @@ impl PackageIdentity {
 /// One normalized, retrievable piece of documentation with provenance.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeDocument {
-    /// Stable, deterministic identifier (see [crate::id]).
+    /// Stable, deterministic identifier (see [`crate::id`]).
     pub id: DocumentId,
 
     /// Exact package identity this document came from.
@@ -162,6 +167,7 @@ pub struct KnowledgeDocument {
 impl KnowledgeDocument {
     /// Heading/symbol context for compact display, e.g.
     /// `Runtime > CPU-bound work` or `tokio::task::spawn_blocking`.
+    #[must_use]
     pub fn context(&self) -> String {
         if let Some(symbol) = &self.symbol_path {
             symbol.clone()
@@ -173,6 +179,7 @@ impl KnowledgeDocument {
     }
 
     /// Short provenance label, e.g. `tokio@1.40 [rustdoc_item / function]`.
+    #[must_use]
     pub fn provenance(&self) -> String {
         match self.item_kind {
             Some(ref kind) => {

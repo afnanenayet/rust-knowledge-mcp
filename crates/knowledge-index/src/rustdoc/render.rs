@@ -9,7 +9,7 @@ use rustdoc_types::{
 };
 
 /// Renders a concise signature for a function item, e.g.
-/// pub async fn offload_blocking<F, R>(work: F) -> R
+/// pub async fn `offload_blocking`<F, R>(work: F) -> R
 fn push_abi(out: &mut String, name: &str, unwind: bool) {
     out.push_str("extern ");
     out.push_str(name);
@@ -19,6 +19,7 @@ fn push_abi(out: &mut String, name: &str, unwind: bool) {
     out.push(' ');
 }
 
+#[must_use]
 pub fn render_function(name: &str, f: &Function, public: bool) -> String {
     let mut out = String::new();
     if public {
@@ -205,8 +206,7 @@ pub fn render_type(t: &Type) -> String {
     match t {
         Type::ResolvedPath(p) => render_path(p),
         Type::DynTrait(d) => render_dyn(d),
-        Type::Generic(s) => s.clone(),
-        Type::Primitive(s) => s.clone(),
+        Type::Generic(s) | Type::Primitive(s) => s.clone(),
         Type::FunctionPointer(fp) => {
             let inputs: Vec<String> = fp
                 .sig

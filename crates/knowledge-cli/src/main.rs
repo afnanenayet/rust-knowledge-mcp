@@ -1,149 +1,193 @@
+//! CLI entry point for the `rust-knowledge` binary.
+//!
+//! The argument surface follows the figue recipes (issue #2): a flattened
+//! figue config root over [`WorkspaceConfig`] layers CLI flags over the
+//! `RUST_KNOWLEDGE`_* environment variables over defaults with figue's own
+//! precedence; [`figue::FigueBuiltins`] contributes --help/--version and
+//! friends; subcommands come from `#[facet(args::subcommand)]`; and
+//! help/version/diagnostics with their exit codes are figue's own
+//! (`DriverOutcome::unwrap`), not emulated. The generated HTML reference
+//! page (`rust-knowledge config-docs`) is figue's `generate_html_help`
+//! output for the [Cli] shape.
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use facet::Facet;
+use figue::{self as args, FigueBuiltins};
 use knowledge_core::KnowledgeRetriever;
 use knowledge_index::CargoUniverse;
+use knowledge_index::config::{WorkspaceConfig, parse_std_args};
 use knowledge_index::corpus::{CorpusOptions, RustdocScope, build_corpus};
 use knowledge_index::rustdoc::{GeneratedRustdocProvider, PrebuiltRustdocProvider};
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "rust-knowledge",
-    version,
-    about = "Search documentation of the resolved Cargo dependency universe of a workspace"
-)]
+const PROGRAM: &str = "rust-knowledge";
+const ABOUT: &str = "Search documentation of the resolved Cargo dependency universe of a workspace";
+
+/// Command-line surface of `rust-knowledge`.
+#[derive(Facet, Debug)]
 struct Cli {
-    /// Path to a Cargo.toml manifest. Defaults to the current directory.
-    #[arg(long, global = true)]
-    manifest_path: Option<PathBuf>,
+    /// Workspace knobs, layered by figue: flags beat $`RUST_KNOWLEDGE`_* env
+    /// vars, which beat defaults.
+    #[facet(args::config, args::env_prefix = "RUST_KNOWLEDGE", flatten)]
+    config: WorkspaceConfig,
 
-    /// Directory for the knowledge index. Defaults to <workspace>/.rust-knowledge
-    #[arg(long, global = true)]
-    index_dir: Option<PathBuf>,
-
-    /// Verbose logging.
-    #[arg(long, short = 'v', global = true)]
+    /// Verbose logging (forces the "debug" filter).
+    #[facet(args::named, args::short = 'v', default)]
     verbose: bool,
 
-    #[command(subcommand)]
+    #[facet(flatten)]
+    builtins: FigueBuiltins,
+
+    #[facet(args::subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Facet, Debug)]
+#[repr(u8)]
 enum Command {
     /// List the packages in the resolved Cargo dependency universe.
     Packages {
         /// Emit JSON (one object per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Build the normalized documentation corpus and print it (debug view).
     DumpDocs {
         /// Only documents of this package (name or name@version).
-        #[arg(long)]
+        #[facet(args::named)]
         package: Option<String>,
 
         /// Which packages get rustdoc JSON generated.
-        #[arg(long, default_value = "workspace")]
+        #[facet(args::named, default = "workspace")]
         rustdoc_scope: String,
 
         /// Read prebuilt rustdoc JSON artifacts from this directory instead
         /// of invoking cargo.
-        #[arg(long)]
+        #[facet(args::named)]
         prebuilt_rustdoc: Option<PathBuf>,
 
         /// Emit one JSON document per line.
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Build the persistent knowledge index for the workspace.
     Index {
         /// Which packages get rustdoc JSON generated.
-        #[arg(long, default_value = "workspace")]
+        #[facet(args::named, default = "workspace")]
         rustdoc_scope: String,
 
         /// Toolchain used for rustdoc generation (default: nightly).
-        #[arg(long)]
+        #[facet(args::named)]
         toolchain: Option<String>,
 
         /// Read prebuilt rustdoc JSON artifacts from this directory instead
         /// of invoking cargo.
-        #[arg(long)]
+        #[facet(args::named)]
         prebuilt_rustdoc: Option<PathBuf>,
     },
 
     /// Search the knowledge index.
     Search {
         /// Free-form query: natural language or Rust identifiers.
+        #[facet(args::positional)]
         query: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[arg(long = "package")]
-        packages: Vec<String>,
+        // NOTE: the field is named in the singular on purpose: figue's
+        // scalar-to-list coercion looks fields up by their Rust name, so a
+        // `rename`d Vec field fails to deserialize single-occurrence flags
+        // (figue 4.0.5). The singular name kebab-cases to `--package`
+        // without a rename.
+        #[facet(args::named, default)]
+        package: Vec<String>,
 
-        /// Restrict to source kinds (rustdoc_item, rustdoc_module,
-        /// crate_readme, markdown_document). Repeatable.
-        #[arg(long = "source-kind")]
-        source_kinds: Vec<String>,
+        /// Restrict to source kinds (`rustdoc_item`, `rustdoc_module`,
+        /// `crate_readme`, `markdown_document`). Repeatable.
+        #[facet(args::named, default)]
+        source_kind: Vec<String>,
 
         /// Restrict to item kinds (function, struct, trait, ...). Repeatable.
-        #[arg(long = "item-kind")]
-        item_kinds: Vec<String>,
+        #[facet(args::named, default)]
+        item_kind: Vec<String>,
 
         /// Maximum number of results.
-        #[arg(long, default_value = "8")]
+        #[facet(args::named, default = 8)]
         limit: usize,
 
         /// Emit JSON (one hit per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Retrieve one document by its stable id.
     Get {
         /// Document id (as printed by search).
+        #[facet(args::positional)]
         id: String,
 
         /// Emit the full JSON document.
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Look up a symbol by (partial) path.
     Symbol {
-        /// Symbol path or last segment, e.g. demo_core::writer::Writer::flush
-        /// or spawn_blocking.
+        /// Symbol path or last segment, e.g. `demo_core::writer::Writer::flush`
+        /// or `spawn_blocking`.
+        #[facet(args::positional)]
         symbol: String,
 
         /// Restrict to these packages (name or name@version). Repeatable.
-        #[arg(long = "package")]
-        packages: Vec<String>,
+        #[facet(args::named, default)]
+        package: Vec<String>,
 
         /// Emit JSON (one entry per line).
-        #[arg(long)]
+        #[facet(args::named, default)]
         json: bool,
     },
 
     /// Run the retrieval evaluation set against the knowledge index.
     Eval {
         /// Path to the eval file (TOML, [[case]] entries).
+        #[facet(args::positional)]
         file: PathBuf,
     },
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // DriverOutcome::unwrap is figue's native outcome handling: help,
+    // version, completions and schemas print to stdout and exit 0;
+    // diagnostics print to stderr and exit 1 (git-like-multitool recipe).
+    let cli = parse_std_args::<Cli>(PROGRAM, env!("CARGO_PKG_VERSION"), ABOUT).unwrap();
+
+    // EnvFilter::new silently ignores invalid directives (and degrades to
+    // ERROR-only logging), so validate the layered filter where it
+    // becomes an EnvFilter instead of failing quietly later.
+    let filter = cli.config.log_filter(cli.verbose);
+    let env_filter = match tracing_subscriber::EnvFilter::try_new(&filter) {
+        Ok(env_filter) => env_filter,
+        Err(error) => {
+            eprintln!("error: invalid log filter {filter:?}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Logs go to stderr: stdout carries the commands' own output (one
+    // JSON object per line for --json subcommands), so a WARN/INFO line
+    // there would corrupt scripted consumption (knowledge-mcp does the
+    // same for its protocol channel).
     tracing_subscriber::fmt()
-        .with_env_filter(if cli.verbose { "debug" } else { "info" })
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
         .with_target(false)
         .compact()
         .init();
 
-    match run(cli) {
+    match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -152,49 +196,55 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
-        Command::Packages { json } => packages(&cli, *json),
+        Command::Packages { json } => packages(cli, *json),
         Command::DumpDocs {
             package,
             rustdoc_scope,
             prebuilt_rustdoc,
             json,
-        } => dump_docs(&cli, package, rustdoc_scope, prebuilt_rustdoc, *json),
+        } => dump_docs(
+            cli,
+            package.as_ref(),
+            rustdoc_scope,
+            prebuilt_rustdoc.as_ref(),
+            *json,
+        ),
         Command::Index {
             rustdoc_scope,
             toolchain,
             prebuilt_rustdoc,
-        } => index(&cli, rustdoc_scope, toolchain, prebuilt_rustdoc),
+        } => index(
+            cli,
+            rustdoc_scope,
+            toolchain.as_ref(),
+            prebuilt_rustdoc.as_ref(),
+        ),
         Command::Search {
             query,
-            packages,
-            source_kinds,
-            item_kinds,
+            package,
+            source_kind,
+            item_kind,
             limit,
             json,
-        } => search(
-            &cli,
-            query,
-            packages,
-            source_kinds,
-            item_kinds,
-            *limit,
-            *json,
-        ),
-        Command::Get { id, json } => get(&cli, id, *json),
+        } => search(cli, query, package, source_kind, item_kind, *limit, *json),
+        Command::Get { id, json } => get(cli, id, *json),
         Command::Symbol {
             symbol,
-            packages,
+            package,
             json,
-        } => symbol_lookup(&cli, symbol, packages, *json),
-        Command::Eval { file } => eval(&cli, file),
+        } => symbol_lookup(cli, symbol, package, *json),
+        Command::Eval { file } => eval(cli, file),
     }
 }
 
 fn load_universe(cli: &Cli) -> anyhow::Result<CargoUniverse> {
-    CargoUniverse::load(cli.manifest_path.as_deref())
-        .context("failed to load the resolved Cargo universe")
+    CargoUniverse::load_with(
+        cli.config.manifest_path.as_deref(),
+        cli.config.cargo.as_deref(),
+    )
+    .context("failed to load the resolved Cargo universe")
 }
 
 fn packages(cli: &Cli, json: bool) -> anyhow::Result<()> {
@@ -258,14 +308,14 @@ fn parse_scope(name: &str) -> anyhow::Result<RustdocScope> {
 
 fn dump_docs(
     cli: &Cli,
-    package: &Option<String>,
+    package: Option<&String>,
     rustdoc_scope: &str,
-    prebuilt_rustdoc: &Option<PathBuf>,
+    prebuilt_rustdoc: Option<&PathBuf>,
     json: bool,
 ) -> anyhow::Result<()> {
     let universe = load_universe(cli)?;
     let scope = parse_scope(rustdoc_scope)?;
-    let index_dir = index_dir(cli, &universe);
+    let index_dir = cli.config.resolve_index_dir(universe.workspace_root());
 
     let provider: Box<dyn knowledge_index::rustdoc::RustdocProvider> = match prebuilt_rustdoc {
         Some(dir) => Box::new(PrebuiltRustdocProvider { dir: dir.clone() }),
@@ -273,6 +323,7 @@ fn dump_docs(
             &universe,
             index_dir.join("cache").join("rustdoc"),
             Some("nightly".to_string()),
+            cli.config.cargo.as_deref(),
         )),
     };
 
@@ -348,28 +399,23 @@ fn dump_docs(
     Ok(())
 }
 
-fn index_dir(cli: &Cli, universe: &CargoUniverse) -> PathBuf {
-    cli.index_dir
-        .clone()
-        .unwrap_or_else(|| universe.workspace_root().join(".rust-knowledge"))
-}
-
 fn index(
     cli: &Cli,
     rustdoc_scope: &str,
-    toolchain: &Option<String>,
-    prebuilt_rustdoc: &Option<PathBuf>,
+    toolchain: Option<&String>,
+    prebuilt_rustdoc: Option<&PathBuf>,
 ) -> anyhow::Result<()> {
     let scope = parse_scope(rustdoc_scope)?;
     let options = knowledge_index::IndexOptions {
         rustdoc_scope: scope,
-        toolchain: toolchain.clone().or_else(|| Some("nightly".to_string())),
-        prebuilt_rustdoc: prebuilt_rustdoc.clone(),
+        toolchain: Some(toolchain.cloned().unwrap_or_else(|| "nightly".to_string())),
+        prebuilt_rustdoc: prebuilt_rustdoc.cloned(),
         skip_rustdoc: false,
+        cargo: cli.config.cargo.clone(),
     };
     let outcome = knowledge_index::index_workspace(
-        cli.manifest_path.as_deref(),
-        cli.index_dir.as_deref(),
+        cli.config.manifest_path.as_deref(),
+        cli.config.index_dir.as_deref(),
         &options,
     )
     .context("indexing failed")?;
@@ -399,27 +445,35 @@ fn parse_source_kinds(raw: &[String]) -> anyhow::Result<Vec<knowledge_core::Sour
         .collect()
 }
 
+/// Opens the index for the search/get/symbol/eval commands. When
+/// `--index-dir` is absent, a cargo metadata run discovers the
+/// workspace — with the resolved `--cargo` binary, so the flag is
+/// honored on this spawn too.
 fn open_retriever(cli: &Cli) -> anyhow::Result<knowledge_index::TantivyRetriever> {
-    knowledge_index::open_retriever(cli.manifest_path.as_deref(), cli.index_dir.as_deref())
-        .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
-        .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
+    knowledge_index::open_retriever_with(
+        cli.config.manifest_path.as_deref(),
+        cli.config.index_dir.as_deref(),
+        cli.config.cargo.as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!("failed to open knowledge index: {e}"))
+    .with_context(|| "run 'rust-knowledge index' first (or pass --index-dir / --manifest-path)")
 }
 
 fn search(
     cli: &Cli,
     query: &str,
-    packages: &[String],
-    source_kinds: &[String],
-    item_kinds: &[String],
+    package: &[String],
+    source_kind: &[String],
+    item_kind: &[String],
     limit: usize,
     json: bool,
 ) -> anyhow::Result<()> {
     let retriever = open_retriever(cli)?;
     let query = knowledge_core::SearchQuery {
         text: query.to_string(),
-        packages: packages.to_vec(),
-        source_kinds: parse_source_kinds(source_kinds)?,
-        item_kinds: item_kinds.to_vec(),
+        packages: package.to_vec(),
+        source_kinds: parse_source_kinds(source_kind)?,
+        item_kinds: item_kind.to_vec(),
         limit,
     };
     let hits = retriever
@@ -491,11 +545,11 @@ fn get(cli: &Cli, id: &str, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn symbol_lookup(cli: &Cli, symbol: &str, packages: &[String], json: bool) -> anyhow::Result<()> {
+fn symbol_lookup(cli: &Cli, symbol: &str, package: &[String], json: bool) -> anyhow::Result<()> {
     let retriever = open_retriever(cli)?;
     let query = knowledge_core::SymbolQuery {
         symbol: symbol.to_string(),
-        packages: packages.to_vec(),
+        packages: package.to_vec(),
         limit: 10,
     };
     let infos = retriever
@@ -545,7 +599,9 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
         let root = retriever.meta().workspace_root.display().to_string();
         anyhow::ensure!(
             root.ends_with(corpus.trim_end_matches('/')),
-            "this eval file targets the {corpus:?} workspace; the current index              was built for {root:?}. Point --index-dir/--manifest-path at the              matching workspace."
+            "this eval file targets the {corpus:?} workspace; the current index \
+             was built for {root:?}. Point --index-dir/--manifest-path at the \
+             matching workspace."
         );
     }
 
@@ -556,8 +612,7 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
         let status = if outcome.passed() { "PASS" } else { "FAIL" };
         let rank = outcome
             .rank
-            .map(|r| r.to_string())
-            .unwrap_or_else(|| "-".to_string());
+            .map_or_else(|| "-".to_string(), |r| r.to_string());
         println!(
             "{status} rank {rank:>2} {:>16} {:?}",
             outcome.case.category, outcome.case.text
@@ -577,4 +632,288 @@ fn eval(cli: &Cli, file: &PathBuf) -> anyhow::Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use figue::{DriverError, MockEnv};
+    use knowledge_index::config::parse_args_with;
+
+    use super::{ABOUT, Cli, Command, PROGRAM};
+
+    const VERSION: &str = "0.1.0";
+
+    fn parse(argv: &[&str], env: MockEnv) -> figue::DriverOutcome<Cli> {
+        parse_args_with(argv, env, PROGRAM, VERSION, ABOUT)
+    }
+
+    fn parse_ok(argv: &[&str]) -> Cli {
+        parse(argv, MockEnv::new())
+            .into_result()
+            .expect("argv should parse")
+            .get()
+    }
+
+    #[test]
+    fn parses_both_value_forms_and_repeated_flags() {
+        let cli = parse_ok(&[
+            "search",
+            "tokio spawn",
+            "--package",
+            "demo_core",
+            "--package=base64",
+            "--source-kind=rustdoc_item",
+            "--source-kind",
+            "crate_readme",
+            "--item-kind=function",
+            "--limit=3",
+        ]);
+        let Command::Search {
+            query,
+            package,
+            source_kind,
+            item_kind,
+            limit,
+            json,
+        } = &cli.command
+        else {
+            panic!("expected search subcommand, got {:?}", cli.command);
+        };
+        assert_eq!(query, "tokio spawn");
+        assert_eq!(package, &["demo_core".to_string(), "base64".to_string()]);
+        assert_eq!(
+            source_kind,
+            &["rustdoc_item".to_string(), "crate_readme".to_string()]
+        );
+        assert_eq!(item_kind, &["function".to_string()]);
+        assert_eq!(*limit, 3);
+        assert!(!json);
+    }
+
+    #[test]
+    fn defaults_match_the_declared_surface() {
+        let cli = parse_ok(&["search", "anything"]);
+        let Command::Search {
+            query,
+            package,
+            source_kind,
+            item_kind,
+            limit,
+            json,
+        } = &cli.command
+        else {
+            panic!("expected search subcommand");
+        };
+        assert_eq!(query, "anything");
+        assert!(package.is_empty());
+        assert!(source_kind.is_empty());
+        assert!(item_kind.is_empty());
+        assert_eq!(*limit, 8, "--limit must default to 8");
+        assert!(!json);
+
+        let cli = parse_ok(&["dump-docs"]);
+        let Command::DumpDocs { rustdoc_scope, .. } = &cli.command else {
+            panic!("expected dump-docs subcommand");
+        };
+        assert_eq!(rustdoc_scope, "workspace");
+
+        // The config root materializes with its declared defaults when no
+        // layer provides a value.
+        assert_eq!(cli.config.manifest_path, None);
+        assert_eq!(cli.config.index_dir, None);
+        assert_eq!(cli.config.cargo, None);
+        assert_eq!(cli.config.log, "info");
+        assert!(!cli.verbose);
+    }
+
+    #[test]
+    fn global_flags_bind_before_and_after_the_subcommand() {
+        let before = parse_ok(&["--manifest-path", "/before/Cargo.toml", "packages"]);
+        let after = parse_ok(&["packages", "--manifest-path", "/after/Cargo.toml"]);
+        assert_eq!(
+            before.config.manifest_path.as_deref(),
+            Some(Path::new("/before/Cargo.toml"))
+        );
+        assert_eq!(
+            after.config.manifest_path.as_deref(),
+            Some(Path::new("/after/Cargo.toml")),
+            "global flags must bind after the subcommand (figue adoption agency)"
+        );
+
+        let short = parse_ok(&["packages", "-v"]);
+        assert!(short.verbose, "-v must work after the subcommand");
+        let long = parse_ok(&["-v", "packages"]);
+        assert!(long.verbose, "-v must work before the subcommand");
+    }
+
+    #[test]
+    fn missing_subcommand_shows_help() {
+        // figue renders the top-level help and reports it as a success
+        // (exit code 0) when the subcommand is missing.
+        match parse(&[], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => {
+                assert!(e.is_success());
+                let text = format!("{e}");
+                assert!(text.contains(PROGRAM), "help text: {text}");
+                assert!(text.contains("search"), "help lists subcommands: {text}");
+            }
+            Err(other) => panic!("expected Help for empty argv, got {other:?}"),
+            Ok(_) => panic!("empty argv must not parse"),
+        }
+    }
+
+    #[test]
+    fn missing_positional_shows_help_and_suggestion() {
+        // figue's guided failure: when every missing field is a plain CLI
+        // argument, it renders the subcommand help plus a corrected-command
+        // suggestion and reports it as a success (exit code 0).
+        match parse(&["search"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => {
+                assert!(e.is_success());
+                assert_eq!(e.exit_code(), 0);
+                let text = format!("{e}");
+                assert!(text.contains("search"), "help text: {text}");
+                assert!(text.contains("<QUERY>"), "help text: {text}");
+                assert!(
+                    matches!(
+                        &e,
+                        DriverError::Help {
+                            suggestion: Some(_),
+                            ..
+                        }
+                    ),
+                    "a missing positional carries a corrected-command suggestion"
+                );
+            }
+            Err(other) => panic!("expected Help for missing QUERY, got {other:?}"),
+            Ok(_) => panic!("search without a query must not parse"),
+        }
+        match parse(&["eval"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Help { .. }) => assert!(e.is_success()),
+            Err(other) => panic!("expected Help for missing FILE, got {other:?}"),
+            Ok(_) => panic!("eval without a file must not parse"),
+        }
+    }
+
+    #[test]
+    fn unknown_flags_and_subcommands_are_errors() {
+        for argv in [
+            &["--bogus"][..],
+            &["--bogus", "packages"][..],
+            &["packages", "--bogus"][..],
+            &["frobnicate"][..],
+            &["search", "query", "extra"][..],
+        ] {
+            match parse(argv, MockEnv::new()).into_result() {
+                Err(e) => {
+                    assert_eq!(e.exit_code(), 1, "figue error exit code for {argv:?}");
+                    assert!(!e.is_success());
+                }
+                Ok(_) => panic!("{argv:?} must not parse"),
+            }
+        }
+    }
+
+    #[test]
+    fn help_and_version_short_circuit() {
+        for argv in [&["--help"][..], &["-h"][..]] {
+            match parse(argv, MockEnv::new()).into_result() {
+                Err(e @ DriverError::Help { .. }) => {
+                    assert!(e.is_success());
+                    let text = format!("{e}");
+                    assert!(text.contains("--manifest-path"), "help text: {text}");
+                    assert!(text.contains("--index-dir"), "help text: {text}");
+                    assert!(text.contains("search"), "help lists subcommands: {text}");
+                }
+                Err(other) => panic!("expected Help for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
+            }
+        }
+        for argv in [&["--version"][..], &["-V"][..]] {
+            match parse(argv, MockEnv::new()).into_result() {
+                Err(DriverError::Version { text }) => {
+                    assert_eq!(text.trim_end(), "rust-knowledge 0.1.0");
+                }
+                Err(other) => panic!("expected Version for {argv:?}, got {other:?}"),
+                Ok(_) => panic!("{argv:?} must not parse to a value"),
+            }
+        }
+    }
+
+    #[test]
+    fn completions_flag_short_circuits() {
+        match parse(&["--completions", "zsh"], MockEnv::new()).into_result() {
+            Err(e @ DriverError::Completions { .. }) => {
+                assert!(e.is_success());
+                let script = format!("{e}");
+                assert!(script.contains(PROGRAM), "completion script: {script}");
+            }
+            Err(other) => panic!("expected Completions, got {other:?}"),
+            Ok(_) => panic!("--completions must not parse to a value"),
+        }
+    }
+
+    #[test]
+    fn cli_beats_env_end_to_end() {
+        // Flag set: it beats the env var.
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
+        let cli = parse_ok_with_env(&["packages", "--index-dir", "/from-flag"], env);
+        assert_eq!(
+            cli.config.index_dir.as_deref(),
+            Some(Path::new("/from-flag")),
+            "CLI args must beat env vars (figue layer precedence)"
+        );
+
+        // No flag: the env var fills the gap.
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
+        let cli = parse_ok_with_env(&["packages"], env);
+        assert_eq!(
+            cli.config.index_dir.as_deref(),
+            Some(Path::new("/from-env"))
+        );
+    }
+
+    #[test]
+    fn cargo_flag_reaches_the_metadata_spawn() {
+        // Pins the --cargo plumbing end to end: the flag value must reach
+        // the cargo metadata spawn that discovers the workspace when
+        // --index-dir is absent (a bad path fails the spawn instead of a
+        // silent $PATH fallback).
+        let cli = parse_ok(&[
+            "--cargo",
+            "/definitely-not-a-cargo-binary-0123456789",
+            "packages",
+        ]);
+        let error = match super::open_retriever(&cli) {
+            Err(error) => error,
+            Ok(_) => panic!("a bad --cargo must fail the metadata spawn"),
+        };
+        assert!(
+            format!("{error:#}").contains("cargo metadata failed"),
+            "the bad --cargo must fail the metadata spawn, got: {error:#}"
+        );
+    }
+
+    #[test]
+    fn log_layers_cli_env_and_default() {
+        let env = MockEnv::from_pairs([("RUST_LOG", "warn")]);
+        let cli = parse_ok_with_env(&["packages"], env);
+        assert_eq!(cli.config.log, "warn");
+
+        let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_LOG", "trace")]);
+        let cli = parse_ok_with_env(&["packages", "--log", "demo_core=debug"], env);
+        assert_eq!(
+            cli.config.log, "demo_core=debug",
+            "--log must beat the env layer"
+        );
+    }
+
+    fn parse_ok_with_env(argv: &[&str], env: MockEnv) -> Cli {
+        parse(argv, env)
+            .into_result()
+            .expect("argv should parse")
+            .get()
+    }
 }

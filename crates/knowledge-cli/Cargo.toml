@@ -11,7 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-clap = { workspace = true }
+facet = { workspace = true }
+figue = { workspace = true }
 knowledge-core = { workspace = true }
 knowledge-index = { workspace = true }
 serde_json = { workspace = true }

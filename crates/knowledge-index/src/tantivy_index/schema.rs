@@ -1,9 +1,9 @@
 //! Tantivy schema: field layout, boosts, and document conversion.
 //!
-//! Boosts (applied at query time via QueryParser::set_field_boost):
-//!   symbol_path 10  title 5  signature 3  section_text 3  package_name 2.5
-//!   related_text 1.5  body 1
-//! Plus untokenized exact fields (symbol_exact / symbol_last) used by term
+//! Boosts (applied at query time via `QueryParser::set_field_boost)`:
+//!   `symbol_path` 10  title 5  signature 3  `section_text` 3  `package_name` 2.5
+//!   `related_text` 1.5  body 1
+//! Plus untokenized exact fields (`symbol_exact` / `symbol_last`) used by term
 //! queries with much higher boosts for identifier-shaped queries.
 //!
 //! Untokenized fields are stored lowercased: tantivy's raw tokenizer does
@@ -35,12 +35,12 @@ pub struct IndexFields {
     pub package_version: Field,
     /// "name@version" lowercase (filter).
     pub package_key: Field,
-    /// "rustdoc_item" etc. (filter).
+    /// "`rustdoc_item`" etc. (filter).
     pub source_kind: Field,
     /// "function" etc. (filter).
     pub item_kind: Field,
     pub title: Field,
-    /// Tokenized symbol path, e.g. demo_core::writer::Writer::write_all.
+    /// Tokenized symbol path, e.g. `demo_core::writer::Writer::write_all`.
     pub symbol_path: Field,
     /// Full path, lowercased, untokenized (exact match).
     pub symbol_exact: Field,
@@ -50,7 +50,7 @@ pub struct IndexFields {
     pub section_text: Field,
     /// JSON-encoded Vec<String> heading ancestry (stored).
     pub section_json: Field,
-    /// The document text (searchable + stored; the stored copy serves get()).
+    /// The document text (searchable + stored; the stored copy serves `get()`).
     pub body: Field,
     pub signature: Field,
     /// Related symbols joined (searchable).
@@ -58,7 +58,7 @@ pub struct IndexFields {
     /// JSON-encoded related symbols (stored).
     pub related_json: Field,
     pub source_path: Field,
-    /// JSON-encoded SourceSpan (stored).
+    /// JSON-encoded `SourceSpan` (stored).
     pub source_span_json: Field,
 }
 
@@ -99,6 +99,7 @@ fn stored_only() -> TextOptions {
     TextOptions::default().set_stored()
 }
 
+#[must_use]
 pub fn build_schema() -> Schema {
     let mut builder = Schema::builder();
     builder.add_text_field("id", raw());
@@ -125,6 +126,11 @@ pub fn build_schema() -> Schema {
 }
 
 impl IndexFields {
+    /// Resolves all required fields from an existing Tantivy schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required field is absent.
     pub fn from_schema(schema: &Schema) -> Result<Self, IndexError> {
         fn field(schema: &Schema, name: &str) -> Result<Field, IndexError> {
             schema
@@ -157,6 +163,7 @@ impl IndexFields {
 }
 
 /// Converts a normalized document into a Tantivy document.
+#[must_use]
 pub fn to_tantivy_doc(fields: &IndexFields, doc: &KnowledgeDocument) -> TantivyDocument {
     let section_text = doc.section_path.join(" > ");
     let section_json = serde_json::to_string(&doc.section_path).unwrap_or_else(|_| "[]".into());

@@ -45,8 +45,37 @@ unstable): `rustup toolchain install nightly`. Indexing with
     rust-knowledge symbol Writer::write_all       # exact/near-exact lookup
     rust-knowledge dump-docs --package demo-core  # raw corpus (debug)
     rust-knowledge eval evals/queries.toml        # retrieval eval report
+    rust-knowledge config-docs                    # regenerate the reference below
 
-Every command takes `--manifest-path` and `--index-dir`.
+Every command takes `--manifest-path` and `--index-dir` (also accepted after
+the subcommand name). Both binaries define their whole argument surface with
+[facet](https://facet.rs)-derived shapes parsed by
+[figue](https://facet.rs/figue/), following its layered-configuration
+recipe: a flattened config root layers CLI flags over the
+`RUST_KNOWLEDGE_*` environment variables over built-in defaults,
+`FigueBuiltins` contributes `--help`/`--version`/`--completions`/
+`--html-help`/`--export-jsonschemas`, and the subcommands come from a
+facet enum.
+
+The interface is figue-native — issue #2 deliberately stopped emulating the
+previous clap parser, so a few edges differ from it:
+
+- Help, version and completions print to **stdout** and exit 0. A missing
+  subcommand — or a missing positional such as `rust-knowledge search` —
+  shows the relevant help plus a corrected-command suggestion and also
+  exits 0.
+- Usage errors (unknown flags, unknown subcommands, extra positionals)
+  print figue diagnostics to **stderr** and exit 1 (the clap parser used 2).
+- `--help`/`-h`/`--version`/`-V` bind at any level, including after a
+  subcommand name.
+- figue's config-root machinery adds `--config <FILE>` (JSON) and dotted
+  `--config.<field> <VALUE>` overrides alongside the plain flags.
+
+`docs/config-reference.html` is figue's own generated HTML help
+(`figue::generate_html_help`) for the `rust-knowledge` shape — there is
+no hand-rolled rendering. After changing any shape, regenerate it with
+`rust-knowledge config-docs` and commit the result (a test pins the
+committed file). `knowledge-mcp --help` documents that binary's surface.
 
 ## MCP
 
@@ -69,9 +98,19 @@ Claude Code configuration (or Codex equivalent):
       }
     }
 
-`RUST_KNOWLEDGE_INDEX_DIR` can replace `--index-dir`; `RUST_KNOWLEDGE_CARGO`
-overrides the cargo binary used for generation. Logs go to stderr; stdout
-is the MCP channel.
+The environment layer sits below the CLI in both binaries (flags always
+win): `RUST_KNOWLEDGE_INDEX_DIR` replaces `--index-dir`,
+`RUST_KNOWLEDGE_MANIFEST_PATH` replaces `--manifest-path`, and
+`RUST_KNOWLEDGE_CARGO` (or `--cargo` in either binary) overrides the
+cargo binary for every cargo invocation: indexing, rustdoc generation,
+and the `cargo metadata` run that discovers the workspace when
+`--index-dir` is absent (the typical MCP deployment passes only
+`--manifest-path`, so that run happens). `RUST_KNOWLEDGE_LOG` —
+falling back to `RUST_LOG` — sets the tracing filter (`--log` and
+`rust-knowledge --verbose` override it; `-v` forces `debug`). The CLI
+logs to stdout; the MCP server logs to stderr, and a usage error exits 1
+with its diagnostic on stderr — stdout only ever carries MCP protocol
+traffic. See `docs/config-reference.html` for the full reference.
 
 ## Workflow for coding agents (see AGENTS.md)
 

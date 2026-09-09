@@ -153,7 +153,7 @@ KnowledgeDocument corpus (serde JSONL dump + typed docs)
 Tantivy index (schema in `knowledge-index::tantivy`-ish module: schema.rs)
 ▼
 KnowledgeRetriever trait (sync; `knowledge-core`)
-├── knowledge-cli  (clap; index/search/get/packages/dump-docs/eval)
+├── knowledge-cli  (figue over facet shapes; index/search/get/packages/dump-docs/eval/config-docs)
 └── knowledge-mcp  (rmcp; knowledge_search/doc_read/symbol_lookup)
 ```
 

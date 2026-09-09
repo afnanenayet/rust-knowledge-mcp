@@ -9,8 +9,8 @@ use serde::Deserialize;
 pub struct EvalCase {
     /// The query text, as a coding agent would phrase it.
     pub text: String,
-    /// Category: known_symbol, api_discovery, conceptual, cross_package,
-    /// version_sensitive.
+    /// Category: `known_symbol`, `api_discovery`, conceptual, `cross_package`,
+    /// `version_sensitive`.
     pub category: String,
     /// At least one of these contexts (symbol path or joined section path)
     /// must appear in the top results. Prefix matching is used so a whole
@@ -40,6 +40,10 @@ pub struct EvalSet {
 }
 
 /// Parses an eval TOML file ("corpus" key plus "[[case]]" array).
+///
+/// # Errors
+///
+/// Returns the TOML parser's message when `raw` is malformed.
 pub fn parse_set(raw: &str) -> Result<EvalSet, String> {
     #[derive(Deserialize)]
     struct RawEval {
@@ -54,6 +58,10 @@ pub fn parse_set(raw: &str) -> Result<EvalSet, String> {
 }
 
 /// Parses only the cases of an eval TOML file.
+///
+/// # Errors
+///
+/// Returns the TOML parser's message when `raw` is malformed.
 pub fn parse_cases(raw: &str) -> Result<Vec<EvalCase>, String> {
     Ok(parse_set(raw)?.cases)
 }
@@ -70,6 +78,7 @@ pub struct EvalOutcome {
 }
 
 impl EvalOutcome {
+    #[must_use]
     pub fn passed(&self) -> bool {
         matches!(self.rank, Some(rank) if rank <= self.case.max_rank)
     }
@@ -159,6 +168,7 @@ pub struct EvalSummary {
     pub failures: Vec<EvalOutcome>,
 }
 
+#[must_use]
 pub fn summarize(outcomes: &[EvalOutcome]) -> EvalSummary {
     let total = outcomes.len();
     let passed = outcomes.iter().filter(|o| o.passed()).count();
@@ -167,9 +177,9 @@ pub fn summarize(outcomes: &[EvalOutcome]) -> EvalSummary {
     } else {
         outcomes
             .iter()
-            .map(|o| o.rank.map(|r| 1.0 / r as f64).unwrap_or(0.0))
+            .map(|o| o.rank.map_or(0.0, |r| 1.0 / as_f64(r)))
             .sum::<f64>()
-            / total as f64
+            / as_f64(total)
     };
     let failures = outcomes.iter().filter(|o| !o.passed()).cloned().collect();
     EvalSummary {
@@ -178,4 +188,8 @@ pub fn summarize(outcomes: &[EvalOutcome]) -> EvalSummary {
         mrr,
         failures,
     }
+}
+
+fn as_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }

@@ -1,8 +1,8 @@
-//! Normalizing a parsed rustdoc JSON artifact into KnowledgeDocuments.
+//! Normalizing a parsed rustdoc JSON artifact into `KnowledgeDocuments`.
 //!
 //! Walks the local crate from the root module, keeping the fully qualified
 //! path of every public item. Item documentation stays attached to its
-//! symbol; the crate-level and module docs become RustdocModule documents.
+//! symbol; the crate-level and module docs become `RustdocModule` documents.
 //! Derive-generated/synthetic impls and impls of foreign traits are skipped
 //! as compiler noise; trait items and local-trait impl methods are kept.
 
@@ -25,6 +25,11 @@ pub struct RustdocNormalized {
 }
 
 /// Parses and normalizes one rustdoc JSON artifact.
+///
+/// # Errors
+///
+/// Returns an error when the artifact cannot be read, parsed, or does not
+/// match the supported rustdoc JSON format.
 pub fn normalize(
     package: &PackageIdentity,
     artifact: &Path,
@@ -83,7 +88,7 @@ pub fn normalize(
         docs: Vec::new(),
     };
     let root_path = crate_name_for(package);
-    walker.walk_item(parsed.root, root_path, Context::Root);
+    walker.walk_item(parsed.root, &root_path, Context::Root);
 
     info!(
         documents = walker.docs.len(),
@@ -108,11 +113,11 @@ fn crate_name_for(package: &PackageIdentity) -> String {
     package.name.replace('-', "_")
 }
 
-/// Scans the flat top-level "format_version" number out of the raw JSON
+/// Scans the flat top-level "`format_version`" number out of the raw JSON
 /// without parsing the whole document (deeply nested crates can exceed
 /// serde's recursion limit even for probe parses). The real field is the
 /// last top-level key and is colon-adjacent; occurrences inside documented
-/// text (this crate's own docs mention format_version!) are escaped and
+/// text (this crate's own docs mention `format_version`!) are escaped and
 /// lack the colon, so scanning from the end avoids them.
 fn extract_format_version(raw: &str) -> u32 {
     let needle = "\"format_version\":";
@@ -123,7 +128,7 @@ fn extract_format_version(raw: &str) -> u32 {
     let digits: String = after
         .chars()
         .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect();
     if digits.is_empty() {
         return 0;
@@ -174,8 +179,8 @@ struct Walker<'a> {
     docs: Vec<KnowledgeDocument>,
 }
 
-impl<'a> Walker<'a> {
-    fn walk_item(&mut self, id: Id, path: String, ctx: Context) {
+impl Walker<'_> {
+    fn walk_item(&mut self, id: Id, path: &str, ctx: Context) {
         let Some(item) = self.krate.index.get(&id) else {
             return;
         };
@@ -185,72 +190,72 @@ impl<'a> Walker<'a> {
 
         match &item.inner {
             ItemEnum::Module(m) => {
-                self.emit_module(item, &path, m.is_crate);
+                self.emit_module(item, path, m.is_crate);
                 for child in &m.items {
-                    if let Some(name) = self.item_name(child) {
+                    if let Some(name) = self.item_name(*child) {
                         let child_path = format!("{path}::{name}");
-                        self.walk_item(*child, child_path, Context::Module);
+                        self.walk_item(*child, &child_path, Context::Module);
                     } else {
                         debug!(id = ?child, "skipping nameless module child");
                     }
                 }
             }
             ItemEnum::Struct(s) => {
-                self.emit_item(item, &path, "struct", ctx);
-                self.local_paths.insert(id, path.clone());
+                self.emit_item(item, path, "struct", ctx);
+                self.local_paths.insert(id, path.to_owned());
                 for impl_id in &s.impls {
-                    self.walk_impl(*impl_id, path.clone());
+                    self.walk_impl(*impl_id, path);
                 }
             }
             ItemEnum::Enum(e) => {
-                self.emit_item(item, &path, "enum", ctx);
-                self.local_paths.insert(id, path.clone());
+                self.emit_item(item, path, "enum", ctx);
+                self.local_paths.insert(id, path.to_owned());
                 for variant_id in &e.variants {
-                    if let Some(name) = self.item_name(variant_id) {
+                    if let Some(name) = self.item_name(*variant_id) {
                         let variant_path = format!("{path}::{name}");
-                        self.walk_item(*variant_id, variant_path, Context::Module);
+                        self.walk_item(*variant_id, &variant_path, Context::Module);
                     }
                 }
                 for impl_id in &e.impls {
-                    self.walk_impl(*impl_id, path.clone());
+                    self.walk_impl(*impl_id, path);
                 }
             }
             ItemEnum::Union(u) => {
-                self.emit_item(item, &path, "union", ctx);
-                self.local_paths.insert(id, path.clone());
+                self.emit_item(item, path, "union", ctx);
+                self.local_paths.insert(id, path.to_owned());
                 for impl_id in &u.impls {
-                    self.walk_impl(*impl_id, path.clone());
+                    self.walk_impl(*impl_id, path);
                 }
             }
             ItemEnum::Trait(t) => {
-                self.emit_item(item, &path, "trait", ctx);
-                self.local_paths.insert(id, path.clone());
+                self.emit_item(item, path, "trait", ctx);
+                self.local_paths.insert(id, path.to_owned());
                 for child in &t.items {
-                    if let Some(name) = self.item_name(child) {
+                    if let Some(name) = self.item_name(*child) {
                         let child_path = format!("{path}::{name}");
-                        self.walk_item(*child, child_path, Context::Trait);
+                        self.walk_item(*child, &child_path, Context::Trait);
                     }
                 }
                 // Implementations of this trait elsewhere are intentionally
                 // not walked in v1 (their methods duplicate trait docs).
             }
             ItemEnum::Function(f) => {
-                self.emit_function(item, &path, f, ctx);
+                self.emit_function(item, path, f, ctx);
             }
             ItemEnum::TypeAlias(_) => {
-                self.emit_item(item, &path, "type_alias", ctx);
+                self.emit_item(item, path, "type_alias", ctx);
             }
             ItemEnum::Constant { .. } => {
-                self.emit_item(item, &path, "constant", ctx);
+                self.emit_item(item, path, "constant", ctx);
             }
             ItemEnum::Static(_) => {
-                self.emit_item(item, &path, "static", ctx);
+                self.emit_item(item, path, "static", ctx);
             }
             ItemEnum::Variant(_) => {
-                self.emit_item(item, &path, "variant", ctx);
+                self.emit_item(item, path, "variant", ctx);
             }
             ItemEnum::Macro(_) => {
-                self.emit_item(item, &path, "macro", ctx);
+                self.emit_item(item, path, "macro", ctx);
             }
             ItemEnum::ProcMacro(pm) => {
                 let kind = match pm.kind {
@@ -258,7 +263,7 @@ impl<'a> Walker<'a> {
                     rustdoc_types::MacroKind::Attr => "attribute_macro",
                     rustdoc_types::MacroKind::Derive => "derive_macro",
                 };
-                self.emit_item(item, &path, kind, ctx);
+                self.emit_item(item, path, kind, ctx);
             }
             // Re-exports are part of the public API surface: re-export-heavy
             // crates (tokio-style) expose most items through pub use. Follow
@@ -268,7 +273,7 @@ impl<'a> Walker<'a> {
             // check; glob re-exports carry no target id.
             ItemEnum::Use(u) => {
                 if let Some(target) = u.id {
-                    self.walk_item(target, path.clone(), Context::Module);
+                    self.walk_item(target, path, Context::Module);
                 } else {
                     debug!(path = %path, glob = u.is_glob, "unresolvable re-export");
                 }
@@ -288,7 +293,7 @@ impl<'a> Walker<'a> {
 
     /// Walks one impl block for the given owner (the qualified path of the
     /// type the impl is for, when known).
-    fn walk_impl(&mut self, impl_id: Id, owner_path: String) {
+    fn walk_impl(&mut self, impl_id: Id, owner_path: &str) {
         let Some(item) = self.krate.index.get(&impl_id) else {
             return;
         };
@@ -309,11 +314,11 @@ impl<'a> Walker<'a> {
         {
             return;
         }
-        let parent = self.impl_parent(imp, &owner_path);
+        let parent = self.impl_parent(imp, owner_path);
         for child in &imp.items {
-            if let Some(name) = self.item_name(child) {
+            if let Some(name) = self.item_name(*child) {
                 let child_path = format!("{parent}::{name}");
-                self.walk_item(*child, child_path, Context::LocalImpl);
+                self.walk_item(*child, &child_path, Context::LocalImpl);
             }
         }
     }
@@ -333,17 +338,20 @@ impl<'a> Walker<'a> {
         owner_path.to_string()
     }
 
-    fn item_name(&self, id: &Id) -> Option<String> {
-        self.krate.index.get(id).and_then(|item| match &item.inner {
-            // Re-export (use) items carry name: null on the Item in
-            // format 61; the effective name (after any rename) lives on
-            // the Use struct itself.
-            ItemEnum::Use(u) => Some(u.name.clone()),
-            _ => item.name.clone(),
-        })
+    fn item_name(&self, id: Id) -> Option<String> {
+        self.krate
+            .index
+            .get(&id)
+            .and_then(|item| match &item.inner {
+                // Re-export (use) items carry name: null on the Item in
+                // format 61; the effective name (after any rename) lives on
+                // the Use struct itself.
+                ItemEnum::Use(u) => Some(u.name.clone()),
+                _ => item.name.clone(),
+            })
     }
 
-    fn is_public(&self, item: &Item) -> bool {
+    fn is_public(item: &Item) -> bool {
         matches!(item.visibility, Visibility::Public)
     }
 
@@ -360,7 +368,7 @@ impl<'a> Walker<'a> {
     }
 
     fn emit_item(&mut self, item: &Item, path: &str, kind: &str, ctx: Context) {
-        if !self.is_public(item) && ctx == Context::Module {
+        if !Self::is_public(item) && ctx == Context::Module {
             return;
         }
         let title = item.name.clone().unwrap_or_else(|| path.to_string());
@@ -381,11 +389,11 @@ impl<'a> Walker<'a> {
         f: &rustdoc_types::Function,
         ctx: Context,
     ) {
-        if !self.is_public(item) && ctx == Context::Module {
+        if !Self::is_public(item) && ctx == Context::Module {
             return;
         }
         let title = item.name.clone().unwrap_or_else(|| path.to_string());
-        let public = self.is_public(item) || ctx != Context::Module;
+        let public = Self::is_public(item) || ctx != Context::Module;
         let signature = render_function(&title, f, public);
         self.push_doc(
             item,
@@ -424,7 +432,7 @@ impl<'a> Walker<'a> {
             source_kind,
             title: title.to_string(),
             symbol_path: Some(path.to_string()),
-            item_kind: item_kind.map(|k| k.to_string()),
+            item_kind: item_kind.map(std::string::ToString::to_string),
             section_path: Vec::new(),
             text: item.docs.clone().unwrap_or_default(),
             source_path,
@@ -438,7 +446,7 @@ impl<'a> Walker<'a> {
     fn related_symbols(&self, item: &Item, self_path: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for target in item.links.values() {
-            if let Some(path) = self.symbol_path_of(target)
+            if let Some(path) = self.symbol_path_of(*target)
                 && path != self_path
                 && !out.contains(&path)
             {
@@ -453,13 +461,13 @@ impl<'a> Walker<'a> {
 
     /// Resolves an item id to a qualified path, locally first, then through
     /// the crate's paths summary (which covers external items).
-    fn symbol_path_of(&self, id: &Id) -> Option<String> {
-        if let Some(local) = self.local_paths.get(id) {
+    fn symbol_path_of(&self, id: Id) -> Option<String> {
+        if let Some(local) = self.local_paths.get(&id) {
             return Some(local.clone());
         }
         self.krate
             .paths
-            .get(id)
+            .get(&id)
             .map(|summary| summary.path.join("::"))
     }
 
@@ -474,10 +482,10 @@ impl<'a> Walker<'a> {
             path = self.workspace_root.join(path);
         }
         let source_span = SourceSpan {
-            start_line: span.begin.0 as u32,
-            start_col: span.begin.1 as u32,
-            end_line: span.end.0 as u32,
-            end_col: span.end.1 as u32,
+            start_line: u32::try_from(span.begin.0).unwrap_or(u32::MAX),
+            start_col: u32::try_from(span.begin.1).unwrap_or(u32::MAX),
+            end_line: u32::try_from(span.end.0).unwrap_or(u32::MAX),
+            end_col: u32::try_from(span.end.1).unwrap_or(u32::MAX),
         };
         (Some(path), Some(source_span))
     }

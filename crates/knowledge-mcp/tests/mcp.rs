@@ -54,7 +54,10 @@ fn fixture_retriever() -> TantivyRetriever {
     };
     build_index(dir.path(), &documents, &meta).expect("build index");
     let retriever = TantivyRetriever::open(dir.path()).expect("open index");
-    #[expect(clippy::mem_forget, reason = "leak the TempDir for the test's lifetime")]
+    #[expect(
+        clippy::mem_forget,
+        reason = "leak the TempDir for the test's lifetime"
+    )]
     std::mem::forget(dir);
     retriever
 }

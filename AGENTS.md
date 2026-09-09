@@ -39,8 +39,10 @@ cargo run -p knowledge-cli -- eval evals/queries.toml              # retrieval e
   nightly: integration tests run against a committed fixture workspace with
   prebuilt rustdoc artifacts.
 - The index lands in `<workspace>/.rust-knowledge/` (gitignored). `--index-dir`
-  overrides it; `RUST_KNOWLEDGE_INDEX_DIR` and `RUST_KNOWLEDGE_CARGO` are the
-  env-var equivalents.
+  overrides it. The `RUST_KNOWLEDGE_INDEX_DIR`, `RUST_KNOWLEDGE_CARGO`,
+  `RUST_KNOWLEDGE_MANIFEST_PATH` and `RUST_KNOWLEDGE_LOG` (fallback
+  `RUST_LOG`) env vars are figue's environment layer: each sits below its
+  CLI flag, which always wins.
 
 ## Architecture
 
@@ -59,7 +61,7 @@ normalized KnowledgeDocument corpus (deterministic DocumentId)                  
 local Tantivy index (weighted fields, filters)                                  knowledge-index::tantivy_index
         v
 KnowledgeRetriever trait (sync)                                                 knowledge-core::query
-   ├── knowledge-cli  (bin `rust-knowledge`; clap)
+   ├── knowledge-cli  (bin `rust-knowledge`; figue over facet shapes)
    └── knowledge-mcp (bin `knowledge-mcp`; rmcp; thin adapter, no engine deps)
 ```
 
@@ -67,9 +69,10 @@ KnowledgeRetriever trait (sync)                                                 
   `SourceKind`), `DocumentId`, `SearchQuery`/`SearchHit`, the `KnowledgeRetriever`
   trait. No engine dependencies.
 - **`knowledge-index`**: ingestion + retrieval. One small module per concern
-  (`cargo`, `rustdoc`, `markdown`, `corpus`, `tantivy_index`, `store`,
-  `pipeline`, `eval`). `pipeline::index_workspace` is the end-to-end entry point
-  used by both CLI and tests.
+  (`cargo`, `config`, `error`, `rustdoc`, `markdown`, `corpus`,
+  `tantivy_index`, `store`, `pipeline`, `eval`). `pipeline::index_workspace` is the
+  end-to-end entry point used by both CLI and tests. `config` holds the
+  figue/facet `WorkspaceConfig` root shared by both frontends.
 - **`knowledge-cli` / `knowledge-mcp`**: thin frontends over the same engine.
 
 ### Key design decisions (see `docs/design.md` for full detail)

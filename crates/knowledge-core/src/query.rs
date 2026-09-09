@@ -51,6 +51,7 @@ pub struct SearchHit {
 
 impl SearchHit {
     /// Compact one-line provenance, e.g. `tokio@1.40.0 [rustdoc_item]`.
+    #[must_use]
     pub fn provenance(&self) -> String {
         format!(
             "{}@{} [{}]",
@@ -99,9 +100,27 @@ pub struct SymbolInfo {
 /// behind it is synchronous. A future vector or hybrid retriever implements
 /// the same interface (see docs/design.md, "Semantic retrieval").
 pub trait KnowledgeRetriever {
+    /// Searches the indexed corpus.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying retrieval engine cannot execute
+    /// the query.
     fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>>;
 
+    /// Retrieves one complete document by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the document is missing or the retrieval engine
+    /// cannot read it.
     fn get(&self, id: &DocumentId) -> Result<KnowledgeDocument>;
 
+    /// Looks up symbols by exact or near-exact path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying retrieval engine cannot execute
+    /// the lookup.
     fn symbol_lookup(&self, query: &SymbolQuery) -> Result<Vec<SymbolInfo>>;
 }
