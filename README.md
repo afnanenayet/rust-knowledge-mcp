@@ -149,3 +149,11 @@ artifacts, so tests never need a nightly toolchain. The eval set
 across known-symbol / API-discovery / conceptual / cross-package /
 version-sensitive categories, each requiring a useful hit within its rank
 threshold (currently 21/21, MRR ≈ 0.87).
+
+## Benchmarks
+
+Criterion benchmarks over the engine stages (corpus build, index build,
+the eval search workload, symbol lookup, doc get, index open + first
+query) live in `crates/knowledge-index/benches/`; see
+`crates/knowledge-index/benches/README.md` for how to run them, compare
+against a baseline, and read the output.
