@@ -40,7 +40,9 @@ cargo run -p knowledge-cli -- eval evals/queries.toml              # retrieval e
   prebuilt rustdoc artifacts.
 - The index lands in `<workspace>/.rust-knowledge/` (gitignored). `--index-dir`
   overrides it; `RUST_KNOWLEDGE_INDEX_DIR` and `RUST_KNOWLEDGE_CARGO` are the
-  env-var equivalents.
+  env-var equivalents. Every cargo spawn resolves its binary through one
+  shared resolver (`knowledge_index::cargo::resolve`); the precedence order is
+  documented in README.md's "Cargo binary resolution" section.
 
 ## Architecture
 

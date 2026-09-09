@@ -99,10 +99,13 @@ Empirically verified against nightly `1.100.0-nightly (a69a63265 2026-09-03)`:
 - Docs live in `Item.docs` (Markdown, may be absent); intra-doc link targets
   in `Item.links: HashMap<String, Id>` resolve through `index`/`paths` to
   related symbols, including cross-crate ones.
-- Command isolation: `cargo` invokes the `rustdoc` **found on PATH** (not
-  toolchain-pinned). `cargo +nightly` works because the rustup shim prepends
-  the toolchain bin dir to the child PATH. The provider therefore builds
-  cargo invocations carefully (see `rustdoc::provider`).
+- Command isolation: a cargo binary invokes the `rustdoc` **found on PATH**
+  (not toolchain-pinned). `cargo +nightly` works because the rustup shim
+  prepends the toolchain bin dir to the child PATH — a preparation the shared
+  cargo resolver now performs itself: a rustup-resolved cargo is spawned with
+  the toolchain bin dir prepended to its `PATH` (see `cargo::discovery`), so
+  the provider just builds its invocations through the resolver (see
+  `rustdoc::provider`).
 
 ### Tantivy 0.26.1
 

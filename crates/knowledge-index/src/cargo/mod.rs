@@ -6,6 +6,10 @@
 //! classified by source. Nothing in this prototype ever walks the registry
 //! directory by hand.
 
+pub mod discovery;
+
+pub use discovery::{CachedCargo, resolve};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -56,13 +60,15 @@ impl CargoUniverse {
         let span = info_span!("cargo_metadata");
         let _enter = span.enter();
 
+        let cargo = resolve(None);
         let mut cmd = MetadataCommand::new();
-        // Escape hatch for environments where cargo is not on PATH.
-        if let Ok(cargo) = std::env::var("RUST_KNOWLEDGE_CARGO")
-            && !cargo.trim().is_empty()
-        {
-            cmd.cargo_path(cargo.trim());
-        }
+        // The shared resolver picks the cargo binary (see `discovery`);
+        // metadata never requests a toolchain, so the resolved invocation
+        // carries no pre-arguments and cargo_path captures the full choice.
+        // The invocation's PATH prepend (rustup tier) is irrelevant here:
+        // `cargo metadata` never invokes rustc, and MetadataCommand has no
+        // way to inject a child environment.
+        cmd.cargo_path(&cargo.resolved().program);
         if let Some(path) = manifest_path {
             cmd.manifest_path(path);
         }
