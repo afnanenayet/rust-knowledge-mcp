@@ -19,6 +19,7 @@ toml = "0.9"
 tracing = { workspace = true }
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile = "3"
 
 [lints]
