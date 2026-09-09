@@ -10,7 +10,7 @@
 //! page (`rust-knowledge config-docs`) is figue's `generate_html_help`
 //! output for the [Cli] shape.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
@@ -156,13 +156,6 @@ enum Command {
         #[facet(args::positional)]
         file: PathBuf,
     },
-
-    /// Write the HTML configuration reference page.
-    ConfigDocs {
-        /// Output file path (defaults to docs/config-reference.html).
-        #[facet(args::named, default = "docs/config-reference.html")]
-        output: PathBuf,
-    },
 }
 
 fn main() -> ExitCode {
@@ -232,36 +225,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             json,
         } => symbol_lookup(cli, symbol, package, *json),
         Command::Eval { file } => eval(cli, file),
-        Command::ConfigDocs { output } => write_config_reference(output),
     }
-}
-
-/// Render the HTML configuration reference: figue's own generated HTML help
-/// over the whole [Cli] shape (no hand-rolled rendering; regenerate with
-/// `rust-knowledge config-docs`).
-fn render_config_reference() -> String {
-    let help = figue::HelpConfig {
-        program_name: Some(PROGRAM.to_string()),
-        version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        description: Some(ABOUT.to_string()),
-        ..figue::HelpConfig::default()
-    };
-    figue::generate_html_help::<Cli>(&help)
-}
-
-/// Write the HTML configuration reference to `path`, creating parent
-/// directories.
-fn write_config_reference(path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| anyhow::anyhow!("failed to create {}: {e}", parent.display()))?;
-    }
-    std::fs::write(path, render_config_reference())
-        .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))?;
-    println!("wrote {}", path.display());
-    Ok(())
 }
 
 fn load_universe(cli: &Cli) -> anyhow::Result<CargoUniverse> {
@@ -961,25 +925,6 @@ mod tests {
         assert_eq!(
             cli.config.log, "demo_core=debug",
             "--log must beat the env layer"
-        );
-    }
-
-    #[test]
-    fn config_docs_default_output() {
-        let cli = parse_ok(&["config-docs"]);
-        let Command::ConfigDocs { output } = &cli.command else {
-            panic!("expected config-docs subcommand");
-        };
-        assert_eq!(output, Path::new("docs/config-reference.html"));
-    }
-
-    #[test]
-    fn regeneration_reproduces_the_committed_page() {
-        let committed = include_str!("../../../docs/config-reference.html");
-        assert_eq!(
-            super::render_config_reference(),
-            committed,
-            "docs/config-reference.html must be regenerated with: cargo run -p knowledge-cli -- config-docs"
         );
     }
 
