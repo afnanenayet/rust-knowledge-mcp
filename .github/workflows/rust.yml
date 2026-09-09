@@ -33,7 +33,7 @@ jobs:
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.11
       - name: Clippy
-        run: cargo +nightly clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Build
         run: cargo build --verbose
       - name: Run doctests
