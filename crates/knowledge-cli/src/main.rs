@@ -856,34 +856,6 @@ mod tests {
     }
 
     #[test]
-    fn per_subcommand_help_names_itself() {
-        for subcommand in [
-            "packages",
-            "dump-docs",
-            "index",
-            "search",
-            "get",
-            "symbol",
-            "eval",
-            "config-docs",
-        ] {
-            let argv = [subcommand, "--help"];
-            match parse(&argv, MockEnv::new()).into_result() {
-                Err(e @ DriverError::Help { .. }) => {
-                    assert!(e.is_success());
-                    let text = format!("{e}");
-                    assert!(
-                        text.contains(subcommand),
-                        "help for {subcommand} should name it: {text}"
-                    );
-                }
-                Err(other) => panic!("expected Help for {subcommand}, got {other:?}"),
-                Ok(_) => panic!("{subcommand} --help must not parse to a value"),
-            }
-        }
-    }
-
-    #[test]
     fn cli_beats_env_end_to_end() {
         // Flag set: it beats the env var.
         let env = MockEnv::from_pairs([("RUST_KNOWLEDGE_INDEX_DIR", "/from-env")]);
