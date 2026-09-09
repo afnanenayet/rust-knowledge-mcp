@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: ["main"]
 
+# Mostly required so we can publish annotations for tests
+permissions:
+    contents: read
+    checks: write
+    id-token: write
+
 env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
